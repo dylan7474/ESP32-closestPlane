@@ -30,10 +30,12 @@ Aircraft closest;
 
 unsigned long lastFetch = 0;
 
+// Function Prototypes
 void playBeep(int freq, int duration_ms);
 void fetchAircraft();
 double haversine(double lat1, double lon1, double lat2, double lon2);
 double calculateBearing(double lat1, double lon1, double lat2, double lon2);
+void drawCompassAndArrows(double bearing);
 
 double deg2rad(double deg) {
   return deg * PI / 180.0;
@@ -56,6 +58,36 @@ double calculateBearing(double lat1, double lon1, double lat2, double lon2) {
   double bearing = atan2(y, x);
   bearing = fmod((bearing * 180.0 / PI + 360.0), 360.0);
   return bearing;
+}
+
+// --- NEW FUNCTION TO DRAW COMPASS ---
+void drawCompassAndArrows(double bearing) {
+  // Define the center and size of our compass area on the right of the screen
+  int16_t centerX = 96;
+  int16_t centerY = 36;
+  int16_t radius = 26;
+
+  // Draw the compass circle
+  display.drawCircle(centerX, centerY, radius, SH110X_WHITE);
+
+  // --- Draw the North Indicator ---
+  // A small line at the top of the circle
+  display.drawLine(centerX, centerY - radius, centerX, centerY - radius + 5, SH110X_WHITE);
+  // Add the "N" character above the circle
+  display.setCursor(centerX - 3, centerY - radius - 9);
+  display.print("N");
+
+  // --- Draw the Aircraft Arrow ---
+  // Convert the aircraft bearing from degrees to radians for the sin() and cos() functions
+  double angleRad = bearing * PI / 180.0;
+
+  // Calculate the x and y coordinates for the tip of the arrow
+  // We use sin for X and -cos for Y because 0 degrees (North) should be straight up (negative Y direction)
+  int16_t endX = centerX + (radius - 3) * sin(angleRad);
+  int16_t endY = centerY - (radius - 3) * cos(angleRad);
+
+  // Draw the line from the center to the calculated point
+  display.drawLine(centerX, centerY, endX, endY, SH110X_WHITE);
 }
 
 void setup() {
@@ -140,7 +172,7 @@ void loop() {
 void fetchAircraft() {
   HTTPClient http;
   char url[160];
-  snprintf(url, sizeof(url), "http://%s:%d/dump1090/data/aircraft.json", DUMP1090_SERVER, DUMP1090_PORT);
+  snprintf(url, sizeof(url), "http://%s:%d/dump1090-fa/data/aircraft.json", DUMP1090_SERVER, DUMP1090_PORT);
   Serial.printf("Fetching aircraft data from %s\n", url);
   if (!http.begin(url)) {
     Serial.println("HTTP begin failed");
@@ -171,19 +203,25 @@ void fetchAircraft() {
         }
       }
 
+      // --- MODIFIED DISPLAY SECTION ---
       display.clearDisplay();
       display.setCursor(0, 0);
       if (minDist < 1e9) {
         Serial.printf("Closest: %s %.2f km bearing %.1f deg\n", closest.flight.c_str(), closest.distanceKm, closest.bearing);
-        display.print("Flight: ");
-        display.println(closest.flight);
-        display.print("Dist: ");
-        display.print(closest.distanceKm, 1);
-        display.println(" km");
-        display.print("Bear: ");
-        display.print(closest.bearing, 1);
-        display.println(" deg");
+        
+        // Display Flight Info on the left side
+        display.print("Flt: "); 
+        display.println(closest.flight.substring(0, 7)); // Truncate long flight names
+        
+        display.print("Dst: "); 
+        display.print(closest.distanceKm, 1); 
+        display.println("km");
+
+        // Call our new function to draw the compass and arrows on the right
+        drawCompassAndArrows(closest.bearing);
+        
         display.display();
+
         if (closest.distanceKm < PROXIMITY_ALERT_KM) {
           playBeep(1000, 200);
         }
@@ -192,6 +230,7 @@ void fetchAircraft() {
         display.println("No aircraft");
         display.display();
       }
+
     } else {
       Serial.printf("JSON parse error: %s\n", err.c_str());
     }
