@@ -20,12 +20,11 @@
 
 Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-// --- UPDATED AIRCRAFT STRUCT with isValid flag ---
 struct Aircraft {
   String flight;
   double distanceKm;
   double bearing;
-  bool isValid; // ADDED: A flag to reliably track if a target is valid
+  bool isValid;
 };
 
 struct RadarBlip {
@@ -70,7 +69,7 @@ void setup() {
   Serial.println("Booting ClosestPlane Radar");
 
   dataMutex = xSemaphoreCreateMutex();
-  closest.isValid = false; // Initialize isValid to false
+  closest.isValid = false;
 
   display.begin(0x3C, true);
   display.clearDisplay();
@@ -111,9 +110,7 @@ void setup() {
 void loop() {
   xSemaphoreTake(dataMutex, portMAX_DELAY);
 
-  // --- CHANGED: Check 'isValid' flag instead of flight string ---
   bool hasTarget = closest.isValid;
-
   bool bearingCrossed = (lastSweepAngle < closest.bearing && sweepAngle >= closest.bearing);
   if (lastSweepAngle > sweepAngle) {
     if (closest.bearing > lastSweepAngle || closest.bearing <= sweepAngle) {
@@ -158,7 +155,7 @@ void loop() {
   delay(10);
 }
 
-// --- SCREEN DRAWING FUNCTION ---
+// --- SCREEN DRAWING FUNCTION (with 3-stage shrinking circle fade) ---
 void drawRadarScreen() {
   String currentFlight;
   double currentDistanceKm;
@@ -194,15 +191,17 @@ void drawRadarScreen() {
   display.setCursor(radarCenterX - 3, radarCenterY - radarRadius - 9);
   display.print("N");
 
+  // --- NEW: Draw blips with a 3-stage shrinking filled circle fade ---
   for (const auto& blip : currentBlips) {
-    if (blip.lifespan > BLIP_LIFESPAN_FRAMES * 0.70) {
+    if (blip.lifespan > (BLIP_LIFESPAN_FRAMES * 2 / 3)) {
+      // Stage 1: Radius 3
+      display.fillCircle(blip.x, blip.y, 3, SH110X_WHITE);
+    } else if (blip.lifespan > (BLIP_LIFESPAN_FRAMES * 1 / 3)) {
+      // Stage 2: Radius 2
       display.fillCircle(blip.x, blip.y, 2, SH110X_WHITE);
-    } else if (blip.lifespan > BLIP_LIFESPAN_FRAMES * 0.40) {
-      display.drawCircle(blip.x, blip.y, 2, SH110X_WHITE);
-    } else if (blip.lifespan > BLIP_LIFESPAN_FRAMES * 0.10) {
-      display.drawCircle(blip.x, blip.y, 1, SH110X_WHITE);
     } else {
-      display.drawPixel(blip.x, blip.y, SH110X_WHITE);
+      // Stage 3: Radius 1
+      display.fillCircle(blip.x, blip.y, 1, SH110X_WHITE);
     }
   }
 
@@ -213,6 +212,7 @@ void drawRadarScreen() {
 
   display.display();
 }
+
 
 // --- DATA FETCHING FUNCTION (Updated for Radar Range) ---
 void fetchAircraft() {
@@ -228,7 +228,6 @@ void fetchAircraft() {
     if (deserializeJson(doc, http.getStream()) == DeserializationError::Ok) {
       JsonArray arr = doc["aircraft"].as<JsonArray>();
       
-      // CHANGED: Logic to find the closest plane *within* RADAR_RANGE_KM
       double minDist = RADAR_RANGE_KM; 
       bool planeFoundInRange = false;
       Aircraft newClosest;
