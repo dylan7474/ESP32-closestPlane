@@ -7,6 +7,7 @@
 
 // ADS-B dump1090 server configuration
 #define DUMP1090_SERVER "127.0.0.1" // IP or hostname of dump1090 server
+#define DUMP1090_PORT 8080          // Port of dump1090 JSON endpoint
 #define USER_LAT 51.5074
 #define USER_LON -0.1278
 
