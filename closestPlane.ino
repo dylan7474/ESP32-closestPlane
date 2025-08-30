@@ -16,8 +16,8 @@
 #define REFRESH_INTERVAL_MS 5000
 #define PROXIMITY_ALERT_KM 5.0
 #define EARTH_RADIUS_KM 6371.0
-#define BLIP_LIFESPAN_FRAMES 90 // Lifespan is ~1 full sweep (360 degrees / 4 degrees per frame)
-#define MAX_BLIPS 10           
+#define BLIP_LIFESPAN_FRAMES 90
+#define MAX_BLIPS 10
 
 Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
@@ -25,7 +25,6 @@ struct Aircraft {
   String flight;
   double distanceKm;
   double bearing;
-  bool needsPainting; // Flag to signal that the animation loop should create a new blip
 };
 
 struct RadarBlip {
@@ -42,7 +41,7 @@ SemaphoreHandle_t dataMutex;
 // --- RADAR ANIMATION VARIABLES ---
 float sweepAngle = 0.0;
 float lastSweepAngle = 0.0;
-bool blipPaintedThisTurn = false; // Flag to ensure blip is painted only once per sweep
+bool blipPaintedThisTurn = false;
 const int16_t radarCenterX = 96;
 const int16_t radarCenterY = 36;
 const int16_t radarRadius = 26;
@@ -70,7 +69,6 @@ void setup() {
   Serial.println("Booting ClosestPlane Radar (Final)");
 
   dataMutex = xSemaphoreCreateMutex();
-  closest.needsPainting = false;
 
   display.begin(0x3C, true);
   display.clearDisplay();
@@ -90,7 +88,7 @@ void setup() {
   Serial.println("\nWiFi connected.");
 
   i2s_config_t i2s_config = {
-      .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX), .sample_rate = 44100, .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT, .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT, .communication_format = I2S_COMM_FORMAT_I2S_MSB, .intr_alloc_flags = 0, .dma_buf_count = 4, .dma_buf_len = 64, .use_apll = false, .tx_desc_auto_clear = true, .fixed_mclk = 0};
+      .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX), .sample_rate = 44100, .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT, .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT, .communication_format = I2S_COMM_FORMAT_STAND_I2S, .intr_alloc_flags = 0, .dma_buf_count = 8, .dma_buf_len = 64, .use_apll = false, .tx_desc_auto_clear = true, .fixed_mclk = 0};
   i2s_pin_config_t pin_config = {
       .bck_io_num = I2S_BCLK_PIN, .ws_io_num = I2S_LRCLK_PIN, .data_out_num = I2S_DOUT_PIN, .data_in_num = I2S_PIN_NO_CHANGE};
   i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
@@ -103,18 +101,15 @@ void setup() {
 void loop() {
   xSemaphoreTake(dataMutex, portMAX_DELAY);
 
-  // Check if there is a valid target to paint
   bool hasTarget = !closest.flight.isEmpty();
 
-  // Determine if the sweep has just crossed the target's bearing
   bool bearingCrossed = (lastSweepAngle < closest.bearing && sweepAngle >= closest.bearing);
-  if (lastSweepAngle > sweepAngle) { // Handle 360->0 wrap-around
+  if (lastSweepAngle > sweepAngle) {
     if (closest.bearing > lastSweepAngle || closest.bearing <= sweepAngle) {
       bearingCrossed = true;
     }
   }
 
-  // If there's a target and we haven't painted it this turn, and the sweep crosses it...
   if (hasTarget && !blipPaintedThisTurn && bearingCrossed) {
     double angleRad = closest.bearing * PI / 180.0;
     int16_t newBlipX = radarCenterX + (radarRadius - 3) * sin(angleRad);
@@ -126,10 +121,14 @@ void loop() {
       activeBlips.erase(activeBlips.begin());
     }
     
-    blipPaintedThisTurn = true; // Mark as painted for this sweep
+    blipPaintedThisTurn = true;
+
+    // Beep is now synchronized with the sweep paint event
+    //if (closest.distanceKm < PROXIMITY_ALERT_KM) {
+      playBeep(1000, 50);
+    //}
   }
 
-  // Age and remove all existing blips
   for (auto it = activeBlips.begin(); it != activeBlips.end(); ) {
     it->lifespan--;
     if (it->lifespan <= 0) {
@@ -140,20 +139,19 @@ void loop() {
   }
   xSemaphoreGive(dataMutex);
 
-  // Animation continues
   drawRadarScreen();
   
   lastSweepAngle = sweepAngle;
   sweepAngle += 4.0;
   if (sweepAngle >= 360.0) {
     sweepAngle = 0.0;
-    blipPaintedThisTurn = false; // Reset the flag for the next sweep
+    blipPaintedThisTurn = false;
   }
   
   delay(10);
 }
 
-// --- SCREEN DRAWING FUNCTION (with enhanced fading) ---
+// --- SCREEN DRAWING FUNCTION ---
 void drawRadarScreen() {
   String currentFlight;
   double currentDistanceKm;
@@ -183,19 +181,14 @@ void drawRadarScreen() {
   display.setCursor(radarCenterX - 3, radarCenterY - radarRadius - 9);
   display.print("N");
 
-  // --- Draw blips with a 4-stage fade ---
   for (const auto& blip : currentBlips) {
     if (blip.lifespan > BLIP_LIFESPAN_FRAMES * 0.70) {
-      // Stage 1: Fresh, solid circle
       display.fillCircle(blip.x, blip.y, 2, SH110X_WHITE);
     } else if (blip.lifespan > BLIP_LIFESPAN_FRAMES * 0.40) {
-      // Stage 2: Fading, hollow circle (radius 2)
       display.drawCircle(blip.x, blip.y, 2, SH110X_WHITE);
     } else if (blip.lifespan > BLIP_LIFESPAN_FRAMES * 0.10) {
-      // Stage 3: Fading further, hollow circle (radius 1)
       display.drawCircle(blip.x, blip.y, 1, SH110X_WHITE);
     } else {
-      // Stage 4: Almost gone, single pixel
       display.drawPixel(blip.x, blip.y, SH110X_WHITE);
     }
   }
@@ -241,16 +234,11 @@ void fetchAircraft() {
       xSemaphoreTake(dataMutex, portMAX_DELAY);
       if (planeFound) {
         Serial.printf("Updating target: %s %.1f km, bearing %.0f.\n", newClosest.flight.c_str(), newClosest.distanceKm, newClosest.bearing);
-        // Only update if the bearing has changed significantly, to prevent jitter
         if (abs(newClosest.bearing - closest.bearing) > 2 || closest.flight.isEmpty()) {
             closest = newClosest;
-            closest.needsPainting = true; // Set the flag for the animation loop
-        }
-        if (closest.distanceKm < PROXIMITY_ALERT_KM) {
-          playBeep(1000, 200);
         }
       } else {
-        closest.flight = ""; // Set flight to empty to indicate no target
+        closest.flight = "";
       }
       xSemaphoreGive(dataMutex);
     }
@@ -261,6 +249,16 @@ void fetchAircraft() {
     xSemaphoreGive(dataMutex);
   }
   http.end();
+}
+
+// --- AUDIO FUNCTION (with reduced volume) ---
+void playBeep(int freq, int duration_ms) {
+  const int sampleRate = 44100; int samples = sampleRate * duration_ms / 1000; size_t bytes_written;
+  for (int i = 0; i < samples; i++) {
+    // Amplitude is now 11000 (about 1/3 of max) for lower volume
+    int16_t sample = (int16_t)(sin(2 * PI * freq * i / sampleRate) * 11000);
+    i2s_write(I2S_NUM_0, &sample, sizeof(sample), &bytes_written, portMAX_DELAY);
+  }
 }
 
 double deg2rad(double deg) { return deg * PI / 180.0; }
@@ -279,12 +277,4 @@ double calculateBearing(double lat1, double lon1, double lat2, double lon2) {
   double bearing = atan2(y, x);
   bearing = fmod((bearing * 180.0 / PI + 360.0), 360.0);
   return bearing;
-}
-
-void playBeep(int freq, int duration_ms) {
-  const int sampleRate = 44100; int samples = sampleRate * duration_ms / 1000; size_t bytes_written;
-  for (int i = 0; i < samples; i++) {
-    int16_t sample = (int16_t)(sin(2 * PI * freq * i / sampleRate) * 32767);
-    i2s_write(I2S_NUM_0, &sample, sizeof(sample), &bytes_written, portMAX_DELAY);
-  }
 }
