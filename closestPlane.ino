@@ -27,6 +27,7 @@ struct Aircraft {
 };
 
 Aircraft closest;
+
 unsigned long lastFetch = 0;
 
 void playBeep(int freq, int duration_ms);
@@ -34,7 +35,9 @@ void fetchAircraft();
 double haversine(double lat1, double lon1, double lat2, double lon2);
 double calculateBearing(double lat1, double lon1, double lat2, double lon2);
 
-double deg2rad(double deg) { return deg * PI / 180.0; }
+double deg2rad(double deg) {
+  return deg * PI / 180.0;
+}
 
 double haversine(double lat1, double lon1, double lat2, double lon2) {
   double dLat = deg2rad(lat2 - lat1);
@@ -65,9 +68,9 @@ void setup() {
     display.clearDisplay();
     display.setTextSize(1);
     display.setTextColor(SH110X_WHITE);
-    display.setCursor(0,0);
+    display.setCursor(0, 0);
     display.println("ClosestPlane");
-    display.setCursor(0,8);
+    display.setCursor(0, 8);
     display.println("Starting...");
     display.display();
   } else {
@@ -77,7 +80,7 @@ void setup() {
   Serial.print("Connecting to WiFi");
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   if (displayReady) {
-    display.setCursor(0,16);
+    display.setCursor(0, 16);
     display.print("WiFi...");
     display.display();
   }
@@ -89,7 +92,7 @@ void setup() {
   Serial.println(WiFi.localIP());
   Serial.printf("Configured dump1090 server: %s:%d\n", DUMP1090_SERVER, DUMP1090_PORT);
   if (displayReady) {
-    display.setCursor(0,24);
+    display.setCursor(0, 24);
     display.println("Connected");
     display.display();
   }
@@ -97,26 +100,22 @@ void setup() {
   // I2S setup for MAX98357A
   Serial.println("Initializing I2S amplifier");
   i2s_config_t i2s_config = {
-    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
-    .sample_rate = 44100,
-    .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-    .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-    .communication_format = I2S_COMM_FORMAT_I2S_MSB,
-    .intr_alloc_flags = 0,
-    .dma_buf_count = 4,
-    .dma_buf_len = 64,
-    .use_apll = false,
-    .tx_desc_auto_clear = true,
-    .fixed_mclk = 0
-  };
-
+      .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
+      .sample_rate = 44100,
+      .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+      .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+      .communication_format = I2S_COMM_FORMAT_I2S_MSB,
+      .intr_alloc_flags = 0,
+      .dma_buf_count = 4,
+      .dma_buf_len = 64,
+      .use_apll = false,
+      .tx_desc_auto_clear = true,
+      .fixed_mclk = 0};
   i2s_pin_config_t pin_config = {
-    .bck_io_num = I2S_BCLK_PIN,
-    .ws_io_num = I2S_LRCLK_PIN,
-    .data_out_num = I2S_DOUT_PIN,
-    .data_in_num = I2S_PIN_NO_CHANGE
-  };
-
+      .bck_io_num = I2S_BCLK_PIN,
+      .ws_io_num = I2S_LRCLK_PIN,
+      .data_out_num = I2S_DOUT_PIN,
+      .data_in_num = I2S_PIN_NO_CHANGE};
   esp_err_t err = i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
   if (err == ESP_OK) {
     Serial.println("I2S driver installed");
@@ -173,12 +172,17 @@ void fetchAircraft() {
       }
 
       display.clearDisplay();
-      display.setCursor(0,0);
+      display.setCursor(0, 0);
       if (minDist < 1e9) {
         Serial.printf("Closest: %s %.2f km bearing %.1f deg\n", closest.flight.c_str(), closest.distanceKm, closest.bearing);
-        display.print("Flight: "); display.println(closest.flight);
-        display.print("Dist: "); display.print(closest.distanceKm, 1); display.println(" km");
-        display.print("Bear: "); display.print(closest.bearing, 1); display.println(" deg");
+        display.print("Flight: ");
+        display.println(closest.flight);
+        display.print("Dist: ");
+        display.print(closest.distanceKm, 1);
+        display.println(" km");
+        display.print("Bear: ");
+        display.print(closest.bearing, 1);
+        display.println(" deg");
         display.display();
         if (closest.distanceKm < PROXIMITY_ALERT_KM) {
           playBeep(1000, 200);
