@@ -22,11 +22,83 @@ The display refreshes every few seconds showing the closest aircraft's callsign,
 
 ## Building in a Codex/Codespace Environment
 
-To compile this sketch in a container or automated environment using the Arduino CLI:
+The following setup script prepares a Codex/Codespace container with all required tools and
+libraries for this project. Run it in your container before compiling:
 
 ```bash
-arduino-cli core install esp32:esp32
-arduino-cli lib install "Adafruit GFX Library" "Adafruit SSD1306" "ArduinoJson"
+#!/bin/bash
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+echo "==> Base packages"
+apt-get update
+apt-get install -y --no-install-recommends \
+  curl ca-certificates git python3 tar xz-utils
+
+# -------- Proxy + IPv4 hardening --------
+# If only HTTP_PROXY is set by the runner, mirror it to HTTPS so arduino-cli/curl can use it.
+if [[ -n "${HTTP_PROXY:-}" && -z "${HTTPS_PROXY:-}" ]]; then
+  export HTTPS_PROXY="$HTTP_PROXY"
+fi
+# Respect lowercase variants too
+if [[ -n "${http_proxy:-}" && -z "${https_proxy:-}" ]]; then
+  export https_proxy="$http_proxy"
+fi
+
+# Prefer IPv4 to avoid IPv6 unreachable errors seen in logs
+# Safe no-op if already present.
+if ! grep -q '^precedence ::ffff:0:0/96 100' /etc/gai.conf 2>/dev/null; then
+  echo "precedence ::ffff:0:0/96 100" >> /etc/gai.conf
+fi
+
+# -------- Helpers --------
+retry() {
+  # retry <attempts> <sleep_seconds> <command...>
+  local attempts="$1"; shift
+  local sleep_s="$1"; shift
+  local n=1
+  until "$@"; do
+    if [[ $n -ge $attempts ]]; then
+      echo "Command failed after $n attempts: $*" >&2
+      return 1
+    fi
+    echo "Retry $n/$attempts failed. Sleeping ${sleep_s}s…"
+    n=$((n+1))
+    sleep "$sleep_s"
+  done
+}
+
+# -------- arduino-cli install --------
+echo "==> Installing arduino-cli (official script)"
+curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
+install -m 0755 bin/arduino-cli /usr/local/bin/arduino-cli
+rm -rf bin
+arduino-cli version
+
+# -------- arduino-cli config --------
+echo "==> Configuring Arduino CLI"
+arduino-cli config init --overwrite
+arduino-cli config set board_manager.additional_urls \
+  https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+
+echo "==> Updating indexes (with retries, IPv4 preference)"
+retry 5 5 arduino-cli core update-index
+
+echo "==> Installing ESP32 core"
+retry 5 5 arduino-cli core install esp32:esp32
+
+echo "==> Installing libraries"
+retry 5 5 arduino-cli lib install "Adafruit GFX Library"
+retry 5 5 arduino-cli lib install "Adafruit SSD1306"
+retry 5 5 arduino-cli lib install "ArduinoJson"
+
+echo "✅ Setup complete. You can compile with:"
+echo "   arduino-cli compile --fqbn esp32:esp32:esp32 closestPlane.ino"
+```
+
+After running the script, compile the sketch:
+
+```bash
 arduino-cli compile --fqbn esp32:esp32:esp32 closestPlane.ino
 ```
 
