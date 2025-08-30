@@ -2,9 +2,10 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <Adafruit_SH110X.h>
 #include <Wire.h>
 #include <driver/i2s.h>
+#include <esp_err.h>
 #include <math.h>
 
 #include "config.h"
@@ -15,7 +16,7 @@
 #define PROXIMITY_ALERT_KM 5.0
 #define EARTH_RADIUS_KM 6371.0
 
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 struct Aircraft {
   String flight;
@@ -56,23 +57,44 @@ double calculateBearing(double lat1, double lon1, double lat2, double lon2) {
 
 void setup() {
   Serial.begin(115200);
-  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0,0);
-  display.println("ClosestPlane");
-  display.display();
+  Serial.println("Booting ClosestPlane");
 
+  bool displayReady = display.begin(0x3C, true);
+  if (displayReady) {
+    Serial.println("OLED display initialized");
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SH110X_WHITE);
+    display.setCursor(0,0);
+    display.println("ClosestPlane");
+    display.setCursor(0,8);
+    display.println("Starting...");
+    display.display();
+  } else {
+    Serial.println("Failed to initialize OLED display");
+  }
+
+  Serial.print("Connecting to WiFi");
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  display.setCursor(0,16);
-  display.print("WiFi...");
-  display.display();
+  if (displayReady) {
+    display.setCursor(0,16);
+    display.print("WiFi...");
+    display.display();
+  }
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
+    Serial.print('.');
+  }
+  Serial.print("\nWiFi connected. IP: ");
+  Serial.println(WiFi.localIP());
+  if (displayReady) {
+    display.setCursor(0,24);
+    display.println("Connected");
+    display.display();
   }
 
   // I2S setup for MAX98357A
+  Serial.println("Initializing I2S amplifier");
   i2s_config_t i2s_config = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
     .sample_rate = 44100,
@@ -94,8 +116,18 @@ void setup() {
     .data_in_num = I2S_PIN_NO_CHANGE
   };
 
-  i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
-  i2s_set_pin(I2S_NUM_0, &pin_config);
+  esp_err_t err = i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
+  if (err == ESP_OK) {
+    Serial.println("I2S driver installed");
+  } else {
+    Serial.printf("I2S driver install failed: %s\n", esp_err_to_name(err));
+  }
+  err = i2s_set_pin(I2S_NUM_0, &pin_config);
+  if (err == ESP_OK) {
+    Serial.println("I2S pins configured");
+  } else {
+    Serial.printf("I2S pin config failed: %s\n", esp_err_to_name(err));
+  }
 }
 
 void loop() {
