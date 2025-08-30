@@ -87,6 +87,7 @@ void setup() {
   }
   Serial.print("\nWiFi connected. IP: ");
   Serial.println(WiFi.localIP());
+  Serial.printf("Configured dump1090 server: %s:%d\n", DUMP1090_SERVER, DUMP1090_PORT);
   if (displayReady) {
     display.setCursor(0,24);
     display.println("Connected");
@@ -139,15 +140,21 @@ void loop() {
 
 void fetchAircraft() {
   HTTPClient http;
-  char url[128];
-  snprintf(url, sizeof(url), "http://%s/dump1090/data/aircraft.json", DUMP1090_SERVER);
-  http.begin(url);
+  char url[160];
+  snprintf(url, sizeof(url), "http://%s:%d/dump1090/data/aircraft.json", DUMP1090_SERVER, DUMP1090_PORT);
+  Serial.printf("Fetching aircraft data from %s\n", url);
+  if (!http.begin(url)) {
+    Serial.println("HTTP begin failed");
+    return;
+  }
   int httpCode = http.GET();
+  Serial.printf("HTTP GET returned %d\n", httpCode);
   if (httpCode == HTTP_CODE_OK) {
     DynamicJsonDocument doc(20 * 1024);
     DeserializationError err = deserializeJson(doc, http.getStream());
     if (!err) {
       JsonArray arr = doc["aircraft"].as<JsonArray>();
+      Serial.printf("Parsed %d aircraft\n", arr.size());
       double minDist = 1e9;
       for (JsonObject plane : arr) {
         if (plane.containsKey("lat") && plane.containsKey("lon")) {
@@ -168,6 +175,7 @@ void fetchAircraft() {
       display.clearDisplay();
       display.setCursor(0,0);
       if (minDist < 1e9) {
+        Serial.printf("Closest: %s %.2f km bearing %.1f deg\n", closest.flight.c_str(), closest.distanceKm, closest.bearing);
         display.print("Flight: "); display.println(closest.flight);
         display.print("Dist: "); display.print(closest.distanceKm, 1); display.println(" km");
         display.print("Bear: "); display.print(closest.bearing, 1); display.println(" deg");
@@ -176,10 +184,15 @@ void fetchAircraft() {
           playBeep(1000, 200);
         }
       } else {
+        Serial.println("No aircraft with position data");
         display.println("No aircraft");
         display.display();
       }
+    } else {
+      Serial.printf("JSON parse error: %s\n", err.c_str());
     }
+  } else {
+    Serial.printf("Failed to fetch aircraft: %s\n", http.errorToString(httpCode).c_str());
   }
   http.end();
 }
