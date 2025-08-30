@@ -14,17 +14,18 @@
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define REFRESH_INTERVAL_MS 5000
-#define PROXIMITY_ALERT_KM 5.0
 #define EARTH_RADIUS_KM 6371.0
 #define BLIP_LIFESPAN_FRAMES 90
 #define MAX_BLIPS 10
 
 Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
+// --- UPDATED AIRCRAFT STRUCT with isValid flag ---
 struct Aircraft {
   String flight;
   double distanceKm;
   double bearing;
+  bool isValid; // ADDED: A flag to reliably track if a target is valid
 };
 
 struct RadarBlip {
@@ -66,9 +67,10 @@ void fetchDataTask(void *pvParameters) {
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("Booting ClosestPlane Radar (Final)");
+  Serial.println("Booting ClosestPlane Radar");
 
   dataMutex = xSemaphoreCreateMutex();
+  closest.isValid = false; // Initialize isValid to false
 
   display.begin(0x3C, true);
   display.clearDisplay();
@@ -86,6 +88,7 @@ void setup() {
     Serial.print('.');
   }
   Serial.println("\nWiFi connected.");
+  WiFi.setSleep(false);
 
   i2s_config_t i2s_config = {
       .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX), .sample_rate = 44100, .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT, .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT, .communication_format = I2S_COMM_FORMAT_STAND_I2S, .intr_alloc_flags = 0, .dma_buf_count = 8, .dma_buf_len = 64, .use_apll = false, .tx_desc_auto_clear = true, .fixed_mclk = 0};
@@ -94,14 +97,22 @@ void setup() {
   i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
   i2s_set_pin(I2S_NUM_0, &pin_config);
 
-  xTaskCreatePinnedToCore(fetchDataTask, "FetchData", 4096, NULL, 1, NULL, 0);
+  xTaskCreatePinnedToCore(
+      fetchDataTask,
+      "FetchData",
+      8192,
+      NULL,
+      2,
+      NULL,
+      0);
 }
 
-// --- MAIN LOOP ON CORE 1: ANIMATION, FADING, AND BLIP CREATION ---
+// --- MAIN LOOP ON CORE 1 ---
 void loop() {
   xSemaphoreTake(dataMutex, portMAX_DELAY);
 
-  bool hasTarget = !closest.flight.isEmpty();
+  // --- CHANGED: Check 'isValid' flag instead of flight string ---
+  bool hasTarget = closest.isValid;
 
   bool bearingCrossed = (lastSweepAngle < closest.bearing && sweepAngle >= closest.bearing);
   if (lastSweepAngle > sweepAngle) {
@@ -122,11 +133,7 @@ void loop() {
     }
     
     blipPaintedThisTurn = true;
-
-    // Beep is now synchronized with the sweep paint event
-    //if (closest.distanceKm < PROXIMITY_ALERT_KM) {
-      playBeep(1000, 50);
-    //}
+    playBeep(1000, 50);
   }
 
   for (auto it = activeBlips.begin(); it != activeBlips.end(); ) {
@@ -155,26 +162,32 @@ void loop() {
 void drawRadarScreen() {
   String currentFlight;
   double currentDistanceKm;
+  bool targetIsValid;
   std::vector<RadarBlip> currentBlips;
 
   xSemaphoreTake(dataMutex, portMAX_DELAY);
   currentFlight = closest.flight;
   currentDistanceKm = closest.distanceKm;
+  targetIsValid = closest.isValid;
   currentBlips = activeBlips;
   xSemaphoreGive(dataMutex);
 
   display.clearDisplay();
 
-  if (!currentFlight.isEmpty()) {
+  if (targetIsValid) {
     display.setCursor(0, 0);
     display.print("Flt: ");
-    display.println(currentFlight.substring(0, 7));
+    display.println(currentFlight.isEmpty() ? "------" : currentFlight.substring(0, 7));
     display.print("Dst: ");
     display.print(currentDistanceKm, 1);
     display.println("km");
   } else {
     display.setCursor(0, 0);
     display.println("Scanning...");
+    display.setCursor(0, 8);
+    display.print("Rng: ");
+    display.print(RADAR_RANGE_KM, 0);
+    display.print("km");
   }
 
   display.drawCircle(radarCenterX, radarCenterY, radarRadius, SH110X_WHITE);
@@ -201,7 +214,7 @@ void drawRadarScreen() {
   display.display();
 }
 
-// --- DATA FETCHING FUNCTION ---
+// --- DATA FETCHING FUNCTION (Updated for Radar Range) ---
 void fetchAircraft() {
   HTTPClient http;
   char url[160];
@@ -214,8 +227,10 @@ void fetchAircraft() {
     DynamicJsonDocument doc(20 * 1024);
     if (deserializeJson(doc, http.getStream()) == DeserializationError::Ok) {
       JsonArray arr = doc["aircraft"].as<JsonArray>();
-      double minDist = 1e9;
-      bool planeFound = false;
+      
+      // CHANGED: Logic to find the closest plane *within* RADAR_RANGE_KM
+      double minDist = RADAR_RANGE_KM; 
+      bool planeFoundInRange = false;
       Aircraft newClosest;
       
       for (JsonObject plane : arr) {
@@ -226,36 +241,33 @@ void fetchAircraft() {
             newClosest.flight = plane["flight"].as<String>();
             newClosest.distanceKm = dist;
             newClosest.bearing = calculateBearing(USER_LAT, USER_LON, plane["lat"], plane["lon"]);
-            planeFound = true;
+            planeFoundInRange = true;
           }
         }
       }
 
       xSemaphoreTake(dataMutex, portMAX_DELAY);
-      if (planeFound) {
-        Serial.printf("Updating target: %s %.1f km, bearing %.0f.\n", newClosest.flight.c_str(), newClosest.distanceKm, newClosest.bearing);
-        if (abs(newClosest.bearing - closest.bearing) > 2 || closest.flight.isEmpty()) {
-            closest = newClosest;
-        }
+      if (planeFoundInRange) {
+        Serial.printf("Target in range: %s %.1f km, bearing %.0f.\n", newClosest.flight.c_str(), newClosest.distanceKm, newClosest.bearing);
+        closest = newClosest;
+        closest.isValid = true;
       } else {
-        closest.flight = "";
+        closest.isValid = false;
       }
       xSemaphoreGive(dataMutex);
     }
   } else {
     Serial.printf("HTTP GET failed, error: %d\n", httpCode);
     xSemaphoreTake(dataMutex, portMAX_DELAY);
-    closest.flight = "";
+    closest.isValid = false;
     xSemaphoreGive(dataMutex);
   }
   http.end();
 }
 
-// --- AUDIO FUNCTION (with reduced volume) ---
 void playBeep(int freq, int duration_ms) {
   const int sampleRate = 44100; int samples = sampleRate * duration_ms / 1000; size_t bytes_written;
   for (int i = 0; i < samples; i++) {
-    // Amplitude is now 11000 (about 1/3 of max) for lower volume
     int16_t sample = (int16_t)(sin(2 * PI * freq * i / sampleRate) * 11000);
     i2s_write(I2S_NUM_0, &sample, sizeof(sample), &bytes_written, portMAX_DELAY);
   }
