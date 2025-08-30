@@ -1,6 +1,6 @@
 # ClosestPlane ESP32
 
-An Arduino-compatible sketch for ESP32 boards that connects to a dump1090 server, identifies the closest aircraft to your location and shows details on a 128x64 SSD1306 OLED. If the aircraft comes within 5 km an audible alert is played through a MAX98357 I2S amplifier.
+An Arduino-compatible sketch for ESP32 boards that connects to a dump1090 server, identifies the closest aircraft to your location and shows details on a 128x64 SH1106-based OLED. If the aircraft comes within 5 km an audible alert is played through a MAX98357 I2S amplifier.
 
 ## Required Libraries
 
@@ -8,7 +8,7 @@ Install the following libraries in the Arduino IDE before compiling:
 
 - **ESP32 board support** (`esp32` by Espressif) – provides WiFi, HTTPClient, Wire and I2S functionality.
 - **Adafruit GFX Library**
-- **Adafruit SSD1306**
+- **Adafruit SH110X**
 - **ArduinoJson**
 
 ## Setup
@@ -18,7 +18,7 @@ Install the following libraries in the Arduino IDE before compiling:
 4. Compile and upload.
 
 ## Operation
-The display refreshes every few seconds showing the closest aircraft's callsign, distance and bearing. When an aircraft is closer than 5 km a short beep is generated on the audio output.
+The display refreshes every few seconds showing the closest aircraft's callsign, distance and bearing. When an aircraft is closer than 5 km a short beep is generated on the audio output. Startup and diagnostic messages are printed to the serial monitor at 115200 baud to aid troubleshooting.
 
 ## Building in a Codex/Codespace Environment
 
@@ -89,7 +89,7 @@ retry 5 5 arduino-cli core install esp32:esp32
 
 echo "==> Installing libraries"
 retry 5 5 arduino-cli lib install "Adafruit GFX Library"
-retry 5 5 arduino-cli lib install "Adafruit SSD1306"
+retry 5 5 arduino-cli lib install "Adafruit SH110X"
 retry 5 5 arduino-cli lib install "ArduinoJson"
 
 echo "✅ Setup complete. You can compile with:"
