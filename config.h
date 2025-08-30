@@ -2,11 +2,11 @@
 #define CONFIG_H
 
 // WiFi credentials
-#define WIFI_SSID "YOUR_WIFI_SSID"
-#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+#define WIFI_SSID "YOUR-SSID"
+#define WIFI_PASSWORD "YOUR-PASSWORD"
 
 // -- User Location --
-#define USER_LAT 54.5 
+#define USER_LAT 54.0 
 #define USER_LON -1.0
 
 // -- Radar & Server Settings --
