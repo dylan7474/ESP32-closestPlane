@@ -10,7 +10,6 @@
 #define USER_LON -1.0
 
 // -- Radar & Server Settings --
-#define RADAR_RANGE_KM 50.0             // NEW: Only track aircraft within this distance (in km)
 #define DUMP1090_SERVER "192.168.50.100" // IP or hostname of dump1090 server
 #define DUMP1090_PORT 8080               // The default web port for dump1090 is often 8080
 
