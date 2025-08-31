@@ -1,3 +1,4 @@
+#include <SimpleRotary.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
@@ -16,9 +17,28 @@
 #define REFRESH_INTERVAL_MS 5000
 #define EARTH_RADIUS_KM 6371.0
 #define BLIP_LIFESPAN_FRAMES 90
-#define MAX_BLIPS 10
+#define MAX_BLIPS 20
 
 Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+SimpleRotary VolumeSelector(33, 4, 23);
+SimpleRotary ChannelSelector(25, 32, 2);
+
+// 'volatile' is crucial for safely sharing variables between tasks
+volatile byte VolumeChange = 0, VolumePush = 0;
+volatile byte ChannelChange = 0, ChannelPush = 0;
+
+// Volume and Range Control Variables
+int beepVolume = 10;
+bool displayingVolume = false;
+unsigned long volumeDisplayTimeout = 0;
+
+float rangeSteps[] = {5, 10, 25, 50, 100, 150, 200, 300};
+const int rangeStepsCount = sizeof(rangeSteps) / sizeof(rangeSteps[0]);
+int rangeStepIndex = 3;
+float radarRangeKm = rangeSteps[rangeStepIndex];
+bool displayingRange = false;
+unsigned long rangeDisplayTimeout = 0;
 
 struct Aircraft {
   String flight;
@@ -34,14 +54,15 @@ struct RadarBlip {
 };
 
 // --- MULTI-CORE & SHARED DATA ---
-Aircraft closest;
+Aircraft closestAircraft;
+std::vector<Aircraft> trackedAircraft;
 std::vector<RadarBlip> activeBlips;
 SemaphoreHandle_t dataMutex;
 
 // --- RADAR ANIMATION VARIABLES ---
 float sweepAngle = 0.0;
 float lastSweepAngle = 0.0;
-bool blipPaintedThisTurn = false;
+std::vector<bool> paintedThisTurn;
 const int16_t radarCenterX = 96;
 const int16_t radarCenterY = 36;
 const int16_t radarRadius = 26;
@@ -50,10 +71,40 @@ const int16_t radarRadius = 26;
 void fetchAircraft();
 void drawRadarScreen();
 void fetchDataTask(void *pvParameters);
+void encoderTask(void *pvParameters);
+void Poweroff(String powermessage);
 double haversine(double lat1, double lon1, double lat2, double lon2);
 double calculateBearing(double lat1, double lon1, double lat2, double lon2);
 void playBeep(int freq, int duration_ms);
 double deg2rad(double deg);
+
+// --- NEW: Task for reading encoders reliably ---
+void encoderTask(void *pvParameters) {
+  Serial.println("Encoder polling task started on core 1");
+  for (;;) {
+    byte vol_rotate_event = VolumeSelector.rotate();
+    if (vol_rotate_event != 0) {
+      VolumeChange = vol_rotate_event;
+    }
+
+    byte chan_rotate_event = ChannelSelector.rotate();
+    if (chan_rotate_event != 0) {
+      ChannelChange = chan_rotate_event;
+    }
+    
+    byte vol_push_event = VolumeSelector.pushType(200);
+    if (vol_push_event != 0) {
+      VolumePush = vol_push_event;
+    }
+
+    byte chan_push_event = ChannelSelector.pushType(200);
+    if (chan_push_event != 0) {
+      ChannelPush = chan_push_event;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(5)); // Check every 5ms
+  }
+}
 
 // --- TASK FOR CORE 0: DATA FETCHING ---
 void fetchDataTask(void *pvParameters) {
@@ -65,18 +116,21 @@ void fetchDataTask(void *pvParameters) {
 }
 
 void setup() {
+  pinMode(19, OUTPUT);
+  digitalWrite(19, HIGH);
+
   Serial.begin(115200);
-  Serial.println("Booting ClosestPlane Radar");
+  Serial.println("Booting Multi-Target Radar");
 
   dataMutex = xSemaphoreCreateMutex();
-  closest.isValid = false;
-
+  closestAircraft.isValid = false;
+  
   display.begin(0x3C, true);
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SH110X_WHITE);
   display.setCursor(0, 0);
-  display.println("ClosestPlane Radar");
+  display.println("Multi-Target Radar");
   display.setCursor(0, 16);
   display.println("Connecting WiFi...");
   display.display();
@@ -96,50 +150,85 @@ void setup() {
   i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
   i2s_set_pin(I2S_NUM_0, &pin_config);
 
+  // Create the data fetching task on Core 0
   xTaskCreatePinnedToCore(
-      fetchDataTask,
-      "FetchData",
-      8192,
-      NULL,
-      2,
-      NULL,
-      0);
+      fetchDataTask, "FetchData", 8192, NULL, 2, NULL, 0);
+      
+  // Create the encoder task on Core 1 (same as the display)
+  xTaskCreatePinnedToCore(
+      encoderTask, "Encoder", 2048, NULL, 3, NULL, 1); // High priority
 }
 
-// --- MAIN LOOP ON CORE 1 ---
+// --- MAIN LOOP ON CORE 1 (Graphics and Logic) ---
 void loop() {
+  // Read the volatile flags into local variables
+  byte localVolumeChange = VolumeChange;
+  byte localVolumePush = VolumePush;
+  byte localChannelChange = ChannelChange;
+  byte localChannelPush = ChannelPush;
+  
+  // Reset the volatile flags immediately so we only process each event once
+  if (localVolumeChange != 0) VolumeChange = 0;
+  if (localVolumePush != 0) VolumePush = 0;
+  if (localChannelChange != 0) ChannelChange = 0;
+  if (localChannelPush != 0) ChannelPush = 0;
+  
+  // Now, act on the local copies
+  if (localVolumeChange != 0) {
+    beepVolume += (localVolumeChange == 1) ? 1 : -1;
+    beepVolume = constrain(beepVolume, 0, 20);
+    displayingVolume = true;
+    volumeDisplayTimeout = millis() + 2000;
+  }
+  
+  if (localVolumePush == 2) { Poweroff("Goodbye"); }
+
+  if (localChannelChange != 0) {
+    rangeStepIndex += (localChannelChange == 1) ? 1 : -1;
+    rangeStepIndex = constrain(rangeStepIndex, 0, rangeStepsCount - 1);
+    radarRangeKm = rangeSteps[rangeStepIndex];
+    displayingRange = true;
+    rangeDisplayTimeout = millis() + 2000;
+  }
+
+  // Handle display timeouts
+  if (displayingVolume && millis() > volumeDisplayTimeout) { displayingVolume = false; }
+  if (displayingRange && millis() > rangeDisplayTimeout) { displayingRange = false; }
+
   xSemaphoreTake(dataMutex, portMAX_DELAY);
 
-  bool hasTarget = closest.isValid;
-  bool bearingCrossed = (lastSweepAngle < closest.bearing && sweepAngle >= closest.bearing);
-  if (lastSweepAngle > sweepAngle) {
-    if (closest.bearing > lastSweepAngle || closest.bearing <= sweepAngle) {
-      bearingCrossed = true;
+  // Blip creation for all targets
+  for (int i = 0; i < trackedAircraft.size(); i++) {
+    if (i < paintedThisTurn.size() && !paintedThisTurn[i]) {
+      double targetBearing = trackedAircraft[i].bearing;
+      bool bearingCrossed = (lastSweepAngle < targetBearing && sweepAngle >= targetBearing);
+      if (lastSweepAngle > sweepAngle && (targetBearing > lastSweepAngle || targetBearing <= sweepAngle)) {
+        bearingCrossed = true;
+      }
+
+      if (bearingCrossed) {
+        double angleRad = targetBearing * PI / 180.0;
+        double realDistance = trackedAircraft[i].distanceKm;
+        float screenRadius = map(realDistance, 0, radarRangeKm, 0, radarRadius);
+
+        int16_t newBlipX = radarCenterX + screenRadius * sin(angleRad);
+        int16_t newBlipY = radarCenterY - screenRadius * cos(angleRad);
+        
+        activeBlips.push_back({newBlipX, newBlipY, BLIP_LIFESPAN_FRAMES});
+        if (activeBlips.size() > MAX_BLIPS) {
+          activeBlips.erase(activeBlips.begin());
+        }
+        paintedThisTurn[i] = true;
+        playBeep(1000, 50);
+      }
     }
   }
 
-  if (hasTarget && !blipPaintedThisTurn && bearingCrossed) {
-    double angleRad = closest.bearing * PI / 180.0;
-    int16_t newBlipX = radarCenterX + (radarRadius - 3) * sin(angleRad);
-    int16_t newBlipY = radarCenterY - (radarRadius - 3) * cos(angleRad);
-    
-    activeBlips.push_back({newBlipX, newBlipY, BLIP_LIFESPAN_FRAMES});
-
-    if (activeBlips.size() > MAX_BLIPS) {
-      activeBlips.erase(activeBlips.begin());
-    }
-    
-    blipPaintedThisTurn = true;
-    playBeep(1000, 50);
-  }
-
+  // Age and remove existing blips
   for (auto it = activeBlips.begin(); it != activeBlips.end(); ) {
     it->lifespan--;
-    if (it->lifespan <= 0) {
-      it = activeBlips.erase(it);
-    } else {
-      ++it;
-    }
+    if (it->lifespan <= 0) { it = activeBlips.erase(it); } 
+    else { ++it; }
   }
   xSemaphoreGive(dataMutex);
 
@@ -147,43 +236,79 @@ void loop() {
   
   lastSweepAngle = sweepAngle;
   sweepAngle += 4.0;
+
   if (sweepAngle >= 360.0) {
     sweepAngle = 0.0;
-    blipPaintedThisTurn = false;
+    xSemaphoreTake(dataMutex, portMAX_DELAY);
+    paintedThisTurn.assign(trackedAircraft.size(), false);
+    xSemaphoreGive(dataMutex);
   }
   
   delay(10);
 }
 
-// --- SCREEN DRAWING FUNCTION (with 3-stage shrinking circle fade) ---
+// --- Poweroff function ---
+void Poweroff(String powermessage) {
+  i2s_driver_uninstall(I2S_NUM_0);
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setCursor(0, 0);
+  display.println(powermessage);
+  display.display();
+  delay(1000);
+  digitalWrite(19, LOW);
+}
+
+// --- SCREEN DRAWING FUNCTION ---
 void drawRadarScreen() {
-  String currentFlight;
-  double currentDistanceKm;
-  bool targetIsValid;
+  display.clearDisplay();
+  display.setTextSize(1);
+
+  if (displayingRange) {
+    display.setCursor(20, 16);
+    display.print("Radar Range");
+    display.setTextSize(2);
+    display.setCursor(20, 32);
+    display.print(radarRangeKm, 0);
+    display.print(" km");
+    display.display();
+    return;
+  }
+  if (displayingVolume) {
+    display.setCursor(20, 16);
+    display.print("Beep Volume");
+    display.drawRect(14, 32, 100, 16, SH110X_WHITE);
+    int barWidth = map(beepVolume, 0, 20, 0, 98);
+    display.fillRect(15, 33, barWidth, 14, SH110X_WHITE);
+    display.display();
+    return;
+  }
+
+  Aircraft currentClosest;
+  int targetCount = 0;
   std::vector<RadarBlip> currentBlips;
 
   xSemaphoreTake(dataMutex, portMAX_DELAY);
-  currentFlight = closest.flight;
-  currentDistanceKm = closest.distanceKm;
-  targetIsValid = closest.isValid;
+  currentClosest = closestAircraft;
+  targetCount = trackedAircraft.size();
   currentBlips = activeBlips;
   xSemaphoreGive(dataMutex);
 
-  display.clearDisplay();
-
-  if (targetIsValid) {
+  if (currentClosest.isValid) {
     display.setCursor(0, 0);
     display.print("Flt: ");
-    display.println(currentFlight.isEmpty() ? "------" : currentFlight.substring(0, 7));
+    display.println(currentClosest.flight.isEmpty() ? "------" : currentClosest.flight.substring(0, 7));
     display.print("Dst: ");
-    display.print(currentDistanceKm, 1);
+    display.print(currentClosest.distanceKm, 1);
     display.println("km");
+    display.print("Trgts: ");
+    display.println(targetCount);
   } else {
     display.setCursor(0, 0);
     display.println("Scanning...");
     display.setCursor(0, 8);
     display.print("Rng: ");
-    display.print(RADAR_RANGE_KM, 0);
+    display.print(radarRangeKm, 0);
     display.print("km");
   }
 
@@ -191,16 +316,12 @@ void drawRadarScreen() {
   display.setCursor(radarCenterX - 3, radarCenterY - radarRadius - 9);
   display.print("N");
 
-  // --- NEW: Draw blips with a 3-stage shrinking filled circle fade ---
   for (const auto& blip : currentBlips) {
     if (blip.lifespan > (BLIP_LIFESPAN_FRAMES * 2 / 3)) {
-      // Stage 1: Radius 3
       display.fillCircle(blip.x, blip.y, 3, SH110X_WHITE);
     } else if (blip.lifespan > (BLIP_LIFESPAN_FRAMES * 1 / 3)) {
-      // Stage 2: Radius 2
       display.fillCircle(blip.x, blip.y, 2, SH110X_WHITE);
     } else {
-      // Stage 3: Radius 1
       display.fillCircle(blip.x, blip.y, 1, SH110X_WHITE);
     }
   }
@@ -213,8 +334,7 @@ void drawRadarScreen() {
   display.display();
 }
 
-
-// --- DATA FETCHING FUNCTION (Updated for Radar Range) ---
+// --- DATA FETCHING FUNCTION ---
 void fetchAircraft() {
   HTTPClient http;
   char url[160];
@@ -224,50 +344,53 @@ void fetchAircraft() {
 
   int httpCode = http.GET();
   if (httpCode == HTTP_CODE_OK) {
-    DynamicJsonDocument doc(20 * 1024);
+    DynamicJsonDocument doc(30 * 1024);
     if (deserializeJson(doc, http.getStream()) == DeserializationError::Ok) {
       JsonArray arr = doc["aircraft"].as<JsonArray>();
       
-      double minDist = RADAR_RANGE_KM; 
-      bool planeFoundInRange = false;
+      std::vector<Aircraft> planesInRange;
       Aircraft newClosest;
+      newClosest.isValid = false;
+      double minDist = radarRangeKm;
       
       for (JsonObject plane : arr) {
         if (plane.containsKey("lat") && plane.containsKey("lon")) {
           double dist = haversine(USER_LAT, USER_LON, plane["lat"], plane["lon"]);
-          if (dist < minDist) {
-            minDist = dist;
-            newClosest.flight = plane["flight"].as<String>();
-            newClosest.distanceKm = dist;
-            newClosest.bearing = calculateBearing(USER_LAT, USER_LON, plane["lat"], plane["lon"]);
-            planeFoundInRange = true;
+          if (dist < radarRangeKm) {
+            Aircraft ac;
+            ac.flight = plane["flight"].as<String>();
+            ac.distanceKm = dist;
+            ac.bearing = calculateBearing(USER_LAT, USER_LON, plane["lat"], plane["lon"]);
+            ac.isValid = true;
+            planesInRange.push_back(ac);
+
+            if (dist < minDist) {
+              minDist = dist;
+              newClosest = ac;
+            }
           }
         }
       }
 
       xSemaphoreTake(dataMutex, portMAX_DELAY);
-      if (planeFoundInRange) {
-        Serial.printf("Target in range: %s %.1f km, bearing %.0f.\n", newClosest.flight.c_str(), newClosest.distanceKm, newClosest.bearing);
-        closest = newClosest;
-        closest.isValid = true;
-      } else {
-        closest.isValid = false;
-      }
+      trackedAircraft = planesInRange;
+      closestAircraft = newClosest;
       xSemaphoreGive(dataMutex);
     }
   } else {
-    Serial.printf("HTTP GET failed, error: %d\n", httpCode);
     xSemaphoreTake(dataMutex, portMAX_DELAY);
-    closest.isValid = false;
+    trackedAircraft.clear();
+    closestAircraft.isValid = false;
     xSemaphoreGive(dataMutex);
   }
   http.end();
 }
 
 void playBeep(int freq, int duration_ms) {
+  long amplitude = map(beepVolume, 0, 20, 0, 25000);
   const int sampleRate = 44100; int samples = sampleRate * duration_ms / 1000; size_t bytes_written;
   for (int i = 0; i < samples; i++) {
-    int16_t sample = (int16_t)(sin(2 * PI * freq * i / sampleRate) * 11000);
+    int16_t sample = (int16_t)(sin(2 * PI * freq * i / sampleRate) * amplitude);
     i2s_write(I2S_NUM_0, &sample, sizeof(sample), &bytes_written, portMAX_DELAY);
   }
 }
