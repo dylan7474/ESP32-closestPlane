@@ -9,6 +9,7 @@
 #include <esp_err.h>
 #include <math.h>
 #include <vector>
+#include <EEPROM.h> // --- EEPROM: Include EEPROM library ---
 
 #include "config.h"
 
@@ -19,24 +20,30 @@
 #define BLIP_LIFESPAN_FRAMES 90
 #define MAX_BLIPS 20
 
+// --- EEPROM: Addresses and magic number for saving settings ---
+#define EEPROM_SIZE 64
+#define EEPROM_ADDR_MAGIC 0
+#define EEPROM_ADDR_VOLUME 4
+#define EEPROM_ADDR_RANGE_INDEX 8
+#define EEPROM_MAGIC_NUMBER 0xAC // A unique number to verify our saved data
+
 Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 SimpleRotary VolumeSelector(33, 4, 23);
 SimpleRotary ChannelSelector(25, 32, 2);
 
-// 'volatile' is crucial for safely sharing variables between tasks
 volatile byte VolumeChange = 0, VolumePush = 0;
 volatile byte ChannelChange = 0, ChannelPush = 0;
 
 // Volume and Range Control Variables
-int beepVolume = 10;
+int beepVolume; // Will be loaded from EEPROM
 bool displayingVolume = false;
 unsigned long volumeDisplayTimeout = 0;
 
 float rangeSteps[] = {5, 10, 25, 50, 100, 150, 200, 300};
 const int rangeStepsCount = sizeof(rangeSteps) / sizeof(rangeSteps[0]);
-int rangeStepIndex = 3;
-float radarRangeKm = rangeSteps[rangeStepIndex];
+int rangeStepIndex; // Will be loaded from EEPROM
+float radarRangeKm;
 bool displayingRange = false;
 unsigned long rangeDisplayTimeout = 0;
 
@@ -68,6 +75,8 @@ const int16_t radarCenterY = 36;
 const int16_t radarRadius = 26;
 
 // Function Prototypes
+void saveSettings();
+void loadSettings();
 void fetchAircraft();
 void drawRadarScreen();
 void fetchDataTask(void *pvParameters);
@@ -78,31 +87,19 @@ double calculateBearing(double lat1, double lon1, double lat2, double lon2);
 void playBeep(int freq, int duration_ms);
 double deg2rad(double deg);
 
-// --- NEW: Task for reading encoders reliably ---
+// --- Task for reading encoders reliably ---
 void encoderTask(void *pvParameters) {
   Serial.println("Encoder polling task started on core 1");
   for (;;) {
     byte vol_rotate_event = VolumeSelector.rotate();
-    if (vol_rotate_event != 0) {
-      VolumeChange = vol_rotate_event;
-    }
-
+    if (vol_rotate_event != 0) { VolumeChange = vol_rotate_event; }
     byte chan_rotate_event = ChannelSelector.rotate();
-    if (chan_rotate_event != 0) {
-      ChannelChange = chan_rotate_event;
-    }
-    
+    if (chan_rotate_event != 0) { ChannelChange = chan_rotate_event; }
     byte vol_push_event = VolumeSelector.pushType(200);
-    if (vol_push_event != 0) {
-      VolumePush = vol_push_event;
-    }
-
+    if (vol_push_event != 0) { VolumePush = vol_push_event; }
     byte chan_push_event = ChannelSelector.pushType(200);
-    if (chan_push_event != 0) {
-      ChannelPush = chan_push_event;
-    }
-
-    vTaskDelay(pdMS_TO_TICKS(5)); // Check every 5ms
+    if (chan_push_event != 0) { ChannelPush = chan_push_event; }
+    vTaskDelay(pdMS_TO_TICKS(5));
   }
 }
 
@@ -121,6 +118,9 @@ void setup() {
 
   Serial.begin(115200);
   Serial.println("Booting Multi-Target Radar");
+
+  // --- EEPROM: Initialize and load settings at the start ---
+  loadSettings();
 
   dataMutex = xSemaphoreCreateMutex();
   closestAircraft.isValid = false;
@@ -150,30 +150,25 @@ void setup() {
   i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
   i2s_set_pin(I2S_NUM_0, &pin_config);
 
-  // Create the data fetching task on Core 0
   xTaskCreatePinnedToCore(
       fetchDataTask, "FetchData", 8192, NULL, 2, NULL, 0);
       
-  // Create the encoder task on Core 1 (same as the display)
   xTaskCreatePinnedToCore(
-      encoderTask, "Encoder", 2048, NULL, 3, NULL, 1); // High priority
+      encoderTask, "Encoder", 2048, NULL, 3, NULL, 1);
 }
 
-// --- MAIN LOOP ON CORE 1 (Graphics and Logic) ---
+// --- MAIN LOOP ON CORE 1 ---
 void loop() {
-  // Read the volatile flags into local variables
   byte localVolumeChange = VolumeChange;
   byte localVolumePush = VolumePush;
   byte localChannelChange = ChannelChange;
   byte localChannelPush = ChannelPush;
   
-  // Reset the volatile flags immediately so we only process each event once
   if (localVolumeChange != 0) VolumeChange = 0;
   if (localVolumePush != 0) VolumePush = 0;
   if (localChannelChange != 0) ChannelChange = 0;
   if (localChannelPush != 0) ChannelPush = 0;
   
-  // Now, act on the local copies
   if (localVolumeChange != 0) {
     beepVolume += (localVolumeChange == 1) ? 1 : -1;
     beepVolume = constrain(beepVolume, 0, 20);
@@ -191,13 +186,11 @@ void loop() {
     rangeDisplayTimeout = millis() + 2000;
   }
 
-  // Handle display timeouts
   if (displayingVolume && millis() > volumeDisplayTimeout) { displayingVolume = false; }
   if (displayingRange && millis() > rangeDisplayTimeout) { displayingRange = false; }
 
   xSemaphoreTake(dataMutex, portMAX_DELAY);
 
-  // Blip creation for all targets
   for (int i = 0; i < trackedAircraft.size(); i++) {
     if (i < paintedThisTurn.size() && !paintedThisTurn[i]) {
       double targetBearing = trackedAircraft[i].bearing;
@@ -219,12 +212,11 @@ void loop() {
           activeBlips.erase(activeBlips.begin());
         }
         paintedThisTurn[i] = true;
-        playBeep(1000, 50);
+        playBeep(1000, 25);
       }
     }
   }
 
-  // Age and remove existing blips
   for (auto it = activeBlips.begin(); it != activeBlips.end(); ) {
     it->lifespan--;
     if (it->lifespan <= 0) { it = activeBlips.erase(it); } 
@@ -247,8 +239,11 @@ void loop() {
   delay(10);
 }
 
-// --- Poweroff function ---
+// --- EEPROM: Poweroff function now saves settings ---
 void Poweroff(String powermessage) {
+  Serial.println("Powering off. Saving settings...");
+  saveSettings(); // Save current settings to EEPROM
+  
   i2s_driver_uninstall(I2S_NUM_0);
   display.clearDisplay();
   display.setTextSize(2);
@@ -257,6 +252,38 @@ void Poweroff(String powermessage) {
   display.display();
   delay(1000);
   digitalWrite(19, LOW);
+}
+
+// --- EEPROM: Functions to save and load settings ---
+void saveSettings() {
+  EEPROM.put(EEPROM_ADDR_VOLUME, beepVolume);
+  EEPROM.put(EEPROM_ADDR_RANGE_INDEX, rangeStepIndex);
+  EEPROM.write(EEPROM_ADDR_MAGIC, EEPROM_MAGIC_NUMBER);
+  EEPROM.commit();
+  Serial.println("Settings saved to EEPROM.");
+}
+
+void loadSettings() {
+  EEPROM.begin(EEPROM_SIZE);
+  
+  if (EEPROM.read(EEPROM_ADDR_MAGIC) == EEPROM_MAGIC_NUMBER) {
+    Serial.println("Loading settings from EEPROM...");
+    EEPROM.get(EEPROM_ADDR_VOLUME, beepVolume);
+    EEPROM.get(EEPROM_ADDR_RANGE_INDEX, rangeStepIndex);
+
+    beepVolume = constrain(beepVolume, 0, 20);
+    rangeStepIndex = constrain(rangeStepIndex, 0, rangeStepsCount - 1);
+
+  } else {
+    Serial.println("First run or invalid EEPROM data. Setting defaults.");
+    beepVolume = 10;
+    rangeStepIndex = 3; // Corresponds to 50 km
+    saveSettings(); 
+  }
+
+  radarRangeKm = rangeSteps[rangeStepIndex];
+  Serial.printf("Loaded Volume: %d\n", beepVolume);
+  Serial.printf("Loaded Range: %.0f km\n", radarRangeKm);
 }
 
 // --- SCREEN DRAWING FUNCTION ---
