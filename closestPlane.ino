@@ -9,7 +9,7 @@
 #include <esp_err.h>
 #include <math.h>
 #include <vector>
-#include <EEPROM.h> // --- EEPROM: Include EEPROM library ---
+#include <EEPROM.h>
 
 #include "config.h"
 
@@ -20,7 +20,7 @@
 #define BLIP_LIFESPAN_FRAMES 90
 #define MAX_BLIPS 20
 
-// --- EEPROM: Addresses and magic number for saving settings ---
+// EEPROM addresses and magic number for saving settings
 #define EEPROM_SIZE 64
 #define EEPROM_ADDR_MAGIC 0
 #define EEPROM_ADDR_VOLUME 4
@@ -32,17 +32,18 @@ Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 SimpleRotary VolumeSelector(33, 4, 23);
 SimpleRotary ChannelSelector(25, 32, 2);
 
+// 'volatile' is crucial for safely sharing variables between tasks
 volatile byte VolumeChange = 0, VolumePush = 0;
 volatile byte ChannelChange = 0, ChannelPush = 0;
 
 // Volume and Range Control Variables
-int beepVolume; // Will be loaded from EEPROM
+int beepVolume;
 bool displayingVolume = false;
 unsigned long volumeDisplayTimeout = 0;
 
 float rangeSteps[] = {5, 10, 25, 50, 100, 150, 200, 300};
 const int rangeStepsCount = sizeof(rangeSteps) / sizeof(rangeSteps[0]);
-int rangeStepIndex; // Will be loaded from EEPROM
+int rangeStepIndex;
 float radarRangeKm;
 bool displayingRange = false;
 unsigned long rangeDisplayTimeout = 0;
@@ -89,7 +90,6 @@ double deg2rad(double deg);
 
 // --- Task for reading encoders reliably ---
 void encoderTask(void *pvParameters) {
-  Serial.println("Encoder polling task started on core 1");
   for (;;) {
     byte vol_rotate_event = VolumeSelector.rotate();
     if (vol_rotate_event != 0) { VolumeChange = vol_rotate_event; }
@@ -105,7 +105,6 @@ void encoderTask(void *pvParameters) {
 
 // --- TASK FOR CORE 0: DATA FETCHING ---
 void fetchDataTask(void *pvParameters) {
-  Serial.println("Fetch data task started on core 0");
   for (;;) {
     fetchAircraft();
     vTaskDelay(REFRESH_INTERVAL_MS / portTICK_PERIOD_MS);
@@ -115,16 +114,11 @@ void fetchDataTask(void *pvParameters) {
 void setup() {
   pinMode(19, OUTPUT);
   digitalWrite(19, HIGH);
-
   Serial.begin(115200);
   Serial.println("Booting Multi-Target Radar");
-
-  // --- EEPROM: Initialize and load settings at the start ---
   loadSettings();
-
   dataMutex = xSemaphoreCreateMutex();
   closestAircraft.isValid = false;
-  
   display.begin(0x3C, true);
   display.clearDisplay();
   display.setTextSize(1);
@@ -134,7 +128,6 @@ void setup() {
   display.setCursor(0, 16);
   display.println("Connecting WiFi...");
   display.display();
-
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -142,42 +135,35 @@ void setup() {
   }
   Serial.println("\nWiFi connected.");
   WiFi.setSleep(false);
-
   i2s_config_t i2s_config = {
       .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX), .sample_rate = 44100, .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT, .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT, .communication_format = I2S_COMM_FORMAT_STAND_I2S, .intr_alloc_flags = 0, .dma_buf_count = 8, .dma_buf_len = 64, .use_apll = false, .tx_desc_auto_clear = true, .fixed_mclk = 0};
   i2s_pin_config_t pin_config = {
       .bck_io_num = I2S_BCLK_PIN, .ws_io_num = I2S_LRCLK_PIN, .data_out_num = I2S_DOUT_PIN, .data_in_num = I2S_PIN_NO_CHANGE};
   i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
   i2s_set_pin(I2S_NUM_0, &pin_config);
-
   xTaskCreatePinnedToCore(
       fetchDataTask, "FetchData", 8192, NULL, 2, NULL, 0);
-      
   xTaskCreatePinnedToCore(
       encoderTask, "Encoder", 2048, NULL, 3, NULL, 1);
 }
 
-// --- MAIN LOOP ON CORE 1 ---
+// --- MAIN LOOP ON CORE 1 (Graphics and Logic) ---
 void loop() {
   byte localVolumeChange = VolumeChange;
   byte localVolumePush = VolumePush;
   byte localChannelChange = ChannelChange;
   byte localChannelPush = ChannelPush;
-  
   if (localVolumeChange != 0) VolumeChange = 0;
   if (localVolumePush != 0) VolumePush = 0;
   if (localChannelChange != 0) ChannelChange = 0;
   if (localChannelPush != 0) ChannelPush = 0;
-  
   if (localVolumeChange != 0) {
     beepVolume += (localVolumeChange == 1) ? 1 : -1;
     beepVolume = constrain(beepVolume, 0, 20);
     displayingVolume = true;
     volumeDisplayTimeout = millis() + 2000;
   }
-  
   if (localVolumePush == 2) { Poweroff("Goodbye"); }
-
   if (localChannelChange != 0) {
     rangeStepIndex += (localChannelChange == 1) ? 1 : -1;
     rangeStepIndex = constrain(rangeStepIndex, 0, rangeStepsCount - 1);
@@ -185,12 +171,9 @@ void loop() {
     displayingRange = true;
     rangeDisplayTimeout = millis() + 2000;
   }
-
   if (displayingVolume && millis() > volumeDisplayTimeout) { displayingVolume = false; }
   if (displayingRange && millis() > rangeDisplayTimeout) { displayingRange = false; }
-
   xSemaphoreTake(dataMutex, portMAX_DELAY);
-
   for (int i = 0; i < trackedAircraft.size(); i++) {
     if (i < paintedThisTurn.size() && !paintedThisTurn[i]) {
       double targetBearing = trackedAircraft[i].bearing;
@@ -198,52 +181,42 @@ void loop() {
       if (lastSweepAngle > sweepAngle && (targetBearing > lastSweepAngle || targetBearing <= sweepAngle)) {
         bearingCrossed = true;
       }
-
       if (bearingCrossed) {
         double angleRad = targetBearing * PI / 180.0;
         double realDistance = trackedAircraft[i].distanceKm;
         float screenRadius = map(realDistance, 0, radarRangeKm, 0, radarRadius);
-
         int16_t newBlipX = radarCenterX + screenRadius * sin(angleRad);
         int16_t newBlipY = radarCenterY - screenRadius * cos(angleRad);
-        
         activeBlips.push_back({newBlipX, newBlipY, BLIP_LIFESPAN_FRAMES});
         if (activeBlips.size() > MAX_BLIPS) {
           activeBlips.erase(activeBlips.begin());
         }
         paintedThisTurn[i] = true;
-        playBeep(1000, 25);
+        playBeep(1000, 20);
       }
     }
   }
-
   for (auto it = activeBlips.begin(); it != activeBlips.end(); ) {
     it->lifespan--;
     if (it->lifespan <= 0) { it = activeBlips.erase(it); } 
     else { ++it; }
   }
   xSemaphoreGive(dataMutex);
-
   drawRadarScreen();
-  
   lastSweepAngle = sweepAngle;
   sweepAngle += 4.0;
-
   if (sweepAngle >= 360.0) {
     sweepAngle = 0.0;
     xSemaphoreTake(dataMutex, portMAX_DELAY);
     paintedThisTurn.assign(trackedAircraft.size(), false);
     xSemaphoreGive(dataMutex);
   }
-  
   delay(10);
 }
 
-// --- EEPROM: Poweroff function now saves settings ---
 void Poweroff(String powermessage) {
   Serial.println("Powering off. Saving settings...");
-  saveSettings(); // Save current settings to EEPROM
-  
+  saveSettings();
   i2s_driver_uninstall(I2S_NUM_0);
   display.clearDisplay();
   display.setTextSize(2);
@@ -254,7 +227,6 @@ void Poweroff(String powermessage) {
   digitalWrite(19, LOW);
 }
 
-// --- EEPROM: Functions to save and load settings ---
 void saveSettings() {
   EEPROM.put(EEPROM_ADDR_VOLUME, beepVolume);
   EEPROM.put(EEPROM_ADDR_RANGE_INDEX, rangeStepIndex);
@@ -265,28 +237,23 @@ void saveSettings() {
 
 void loadSettings() {
   EEPROM.begin(EEPROM_SIZE);
-  
   if (EEPROM.read(EEPROM_ADDR_MAGIC) == EEPROM_MAGIC_NUMBER) {
     Serial.println("Loading settings from EEPROM...");
     EEPROM.get(EEPROM_ADDR_VOLUME, beepVolume);
     EEPROM.get(EEPROM_ADDR_RANGE_INDEX, rangeStepIndex);
-
     beepVolume = constrain(beepVolume, 0, 20);
     rangeStepIndex = constrain(rangeStepIndex, 0, rangeStepsCount - 1);
-
   } else {
     Serial.println("First run or invalid EEPROM data. Setting defaults.");
     beepVolume = 10;
     rangeStepIndex = 3; // Corresponds to 50 km
-    saveSettings(); 
+    saveSettings();
   }
-
   radarRangeKm = rangeSteps[rangeStepIndex];
   Serial.printf("Loaded Volume: %d\n", beepVolume);
   Serial.printf("Loaded Range: %.0f km\n", radarRangeKm);
 }
 
-// --- SCREEN DRAWING FUNCTION ---
 void drawRadarScreen() {
   display.clearDisplay();
   display.setTextSize(1);
@@ -328,13 +295,16 @@ void drawRadarScreen() {
     display.print("Dst: ");
     display.print(currentClosest.distanceKm, 1);
     display.println("km");
-    display.print("Trgts: ");
+    display.print("Trgts:");
     display.println(targetCount);
+    display.print("Range:");
+    display.print(radarRangeKm, 0);
+    display.print("km");
   } else {
     display.setCursor(0, 0);
     display.println("Scanning...");
-    display.setCursor(0, 8);
-    display.print("Rng: ");
+    display.setCursor(0, 16);
+    display.print("Range:");
     display.print(radarRangeKm, 0);
     display.print("km");
   }
@@ -361,7 +331,6 @@ void drawRadarScreen() {
   display.display();
 }
 
-// --- DATA FETCHING FUNCTION ---
 void fetchAircraft() {
   HTTPClient http;
   char url[160];
