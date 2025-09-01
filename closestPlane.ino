@@ -13,31 +13,44 @@
 
 #include "config.h"
 
+// --- Display & Timing Constants ---
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define REFRESH_INTERVAL_MS 5000
+#define WIFI_CONNECT_TIMEOUT_MS 10000
+#define DISPLAY_TIMEOUT_MS 1000 // NEW: Standardized timeout for all pop-up screens
+
+// --- Radar Constants ---
 #define EARTH_RADIUS_KM 6371.0
 #define BLIP_LIFESPAN_FRAMES 90
 #define MAX_BLIPS 20
-#define WIFI_CONNECT_TIMEOUT_MS 10000
+#define RADAR_CENTER_X 96
+#define RADAR_CENTER_Y 36
+#define RADAR_RADIUS 27
 
-// EEPROM addresses and magic number for saving settings
+// --- EEPROM Constants ---
 #define EEPROM_SIZE 64
 #define EEPROM_ADDR_MAGIC 0
 #define EEPROM_ADDR_VOLUME 4
 #define EEPROM_ADDR_RANGE_INDEX 8
-#define EEPROM_MAGIC_NUMBER 0xAC // A unique number to verify our saved data
+#define EEPROM_ADDR_SPEED_INDEX 12
+#define EEPROM_MAGIC_NUMBER 0xAD
 
+// --- Display & Rotary Objects ---
 Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
-
 SimpleRotary VolumeSelector(33, 4, 23);
 SimpleRotary ChannelSelector(25, 32, 2);
 
-// 'volatile' is crucial for safely sharing variables between tasks
+// --- Volatile variables for ISR-safe encoder reading ---
 volatile byte VolumeChange = 0, VolumePush = 0;
 volatile byte ChannelChange = 0, ChannelPush = 0;
+volatile bool dataConnectionOk = false;
 
-// Volume and Range Control Variables
+// --- Control State Machine ---
+enum ControlMode { VOLUME, SPEED };
+ControlMode currentMode = VOLUME;
+
+// --- Control Variables ---
 int beepVolume;
 bool displayingVolume = false;
 unsigned long volumeDisplayTimeout = 0;
@@ -49,8 +62,18 @@ float radarRangeKm;
 bool displayingRange = false;
 unsigned long rangeDisplayTimeout = 0;
 
+float sweepSpeedSteps[] = {90.0, 180.0, 270.0, 360.0};
+const int speedStepsCount = sizeof(sweepSpeedSteps) / sizeof(sweepSpeedSteps[0]);
+int sweepSpeedIndex;
+float sweepSpeed;
+bool displayingSpeed = false;
+unsigned long speedDisplayTimeout = 0;
+bool displayingMode = false;
+unsigned long modeDisplayTimeout = 0;
+
+// --- Data Structs ---
 struct Aircraft {
-  String flight;
+  char flight[10];
   double distanceKm;
   double bearing;
   bool isValid;
@@ -62,21 +85,19 @@ struct RadarBlip {
   int lifespan;
 };
 
-// --- MULTI-CORE & SHARED DATA ---
+// --- Multi-core Shared Data ---
 Aircraft closestAircraft;
 std::vector<Aircraft> trackedAircraft;
 std::vector<RadarBlip> activeBlips;
 SemaphoreHandle_t dataMutex;
 
-// --- RADAR ANIMATION VARIABLES ---
+// --- Animation Variables ---
 float sweepAngle = 0.0;
 float lastSweepAngle = 0.0;
 std::vector<bool> paintedThisTurn;
-const int16_t radarCenterX = 96;
-const int16_t radarCenterY = 36;
-const int16_t radarRadius = 26;
+unsigned long lastFrameTime = 0;
 
-// Function Prototypes
+// --- Function Prototypes ---
 void saveSettings();
 void loadSettings();
 void fetchAircraft();
@@ -88,6 +109,7 @@ double haversine(double lat1, double lon1, double lat2, double lon2);
 double calculateBearing(double lat1, double lon1, double lat2, double lon2);
 void playBeep(int freq, int duration_ms);
 double deg2rad(double deg);
+void drawDottedCircle(int16_t x0, int16_t y0, int16_t r, uint16_t color);
 
 // --- Task for reading encoders reliably ---
 void encoderTask(void *pvParameters) {
@@ -116,10 +138,12 @@ void setup() {
   pinMode(19, OUTPUT);
   digitalWrite(19, HIGH);
   Serial.begin(115200);
-  Serial.println("Booting Multi-Target Radar");
+  Serial.println("Booting Multi-Target Radar (Enhanced)");
+
   loadSettings();
   dataMutex = xSemaphoreCreateMutex();
   closestAircraft.isValid = false;
+  
   display.begin(0x3C, true);
   display.clearDisplay();
   display.setTextSize(1);
@@ -129,13 +153,14 @@ void setup() {
   display.setCursor(0, 16);
   display.println("Connecting WiFi...");
   display.display();
+  
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   unsigned long wifiStart = millis();
-  while (WiFi.status() != WL_CONNECTED &&
-         millis() - wifiStart < WIFI_CONNECT_TIMEOUT_MS) {
+  while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < WIFI_CONNECT_TIMEOUT_MS) {
     delay(500);
     Serial.print('.');
   }
+  
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("\nWiFi connected.");
     WiFi.setSleep(false);
@@ -146,20 +171,21 @@ void setup() {
     display.println("WiFi Failed");
     display.display();
   }
-  i2s_config_t i2s_config = {
-      .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX), .sample_rate = 44100, .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT, .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT, .communication_format = I2S_COMM_FORMAT_STAND_I2S, .intr_alloc_flags = 0, .dma_buf_count = 8, .dma_buf_len = 64, .use_apll = false, .tx_desc_auto_clear = true, .fixed_mclk = 0};
-  i2s_pin_config_t pin_config = {
-      .bck_io_num = I2S_BCLK_PIN, .ws_io_num = I2S_LRCLK_PIN, .data_out_num = I2S_DOUT_PIN, .data_in_num = I2S_PIN_NO_CHANGE};
+
+  i2s_config_t i2s_config = {.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX), .sample_rate = 44100, .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT, .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT, .communication_format = I2S_COMM_FORMAT_STAND_I2S, .intr_alloc_flags = 0, .dma_buf_count = 8, .dma_buf_len = 64, .use_apll = false, .tx_desc_auto_clear = true, .fixed_mclk = 0};
+  i2s_pin_config_t pin_config = {.bck_io_num = I2S_BCLK_PIN, .ws_io_num = I2S_LRCLK_PIN, .data_out_num = I2S_DOUT_PIN, .data_in_num = I2S_PIN_NO_CHANGE};
   i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
   i2s_set_pin(I2S_NUM_0, &pin_config);
-  xTaskCreatePinnedToCore(
-      fetchDataTask, "FetchData", 8192, NULL, 2, NULL, 0);
-  xTaskCreatePinnedToCore(
-      encoderTask, "Encoder", 2048, NULL, 3, NULL, 1);
+
+  xTaskCreatePinnedToCore(fetchDataTask, "FetchData", 8192, NULL, 2, NULL, 0);
+  xTaskCreatePinnedToCore(encoderTask, "Encoder", 2048, NULL, 3, NULL, 1);
 }
 
 // --- MAIN LOOP ON CORE 1 (Graphics and Logic) ---
 void loop() {
+  unsigned long currentTime = millis();
+  unsigned long deltaTime = currentTime - lastFrameTime;
+
   byte localVolumeChange = VolumeChange;
   byte localVolumePush = VolumePush;
   byte localChannelChange = ChannelChange;
@@ -168,22 +194,74 @@ void loop() {
   if (localVolumePush != 0) VolumePush = 0;
   if (localChannelChange != 0) ChannelChange = 0;
   if (localChannelPush != 0) ChannelPush = 0;
-  if (localVolumeChange != 0) {
-    beepVolume += (localVolumeChange == 1) ? 1 : -1;
-    beepVolume = constrain(beepVolume, 0, 20);
-    displayingVolume = true;
-    volumeDisplayTimeout = millis() + 500;
+
+  if (localChannelPush == 1) {
+    currentMode = (currentMode == VOLUME) ? SPEED : VOLUME;
+    displayingMode = true;
+    modeDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS; // Standardized delay
   }
+
+  if (localVolumeChange != 0) {
+    if (currentMode == VOLUME) {
+      beepVolume += (localVolumeChange == 1) ? 1 : -1;
+      beepVolume = constrain(beepVolume, 0, 20);
+      displayingVolume = true;
+      volumeDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS; // Standardized delay
+    } else {
+      sweepSpeedIndex += (localVolumeChange == 1) ? 1 : -1;
+      sweepSpeedIndex = constrain(sweepSpeedIndex, 0, speedStepsCount - 1);
+      sweepSpeed = sweepSpeedSteps[sweepSpeedIndex];
+      displayingSpeed = true;
+      speedDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS; // Standardized delay
+    }
+  }
+  
   if (localVolumePush == 2) { Poweroff("Goodbye"); }
+  
   if (localChannelChange != 0) {
     rangeStepIndex += (localChannelChange == 1) ? 1 : -1;
     rangeStepIndex = constrain(rangeStepIndex, 0, rangeStepsCount - 1);
     radarRangeKm = rangeSteps[rangeStepIndex];
     displayingRange = true;
-    rangeDisplayTimeout = millis() + 500;
+    rangeDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS; // Standardized delay
+    
+    xSemaphoreTake(dataMutex, portMAX_DELAY);
+    activeBlips.clear(); 
+    std::vector<Aircraft> filteredAircraft;
+    Aircraft newClosest;
+    newClosest.isValid = false;
+    double minDist = radarRangeKm;
+    for (const auto& ac : trackedAircraft) {
+      if (ac.distanceKm < radarRangeKm) {
+        filteredAircraft.push_back(ac);
+        if (ac.distanceKm < minDist) {
+          minDist = ac.distanceKm;
+          newClosest = ac;
+        }
+      }
+    }
+    trackedAircraft = filteredAircraft;
+    closestAircraft = newClosest;
+    paintedThisTurn.assign(trackedAircraft.size(), false);
+    xSemaphoreGive(dataMutex);
   }
-  if (displayingVolume && millis() > volumeDisplayTimeout) { displayingVolume = false; }
-  if (displayingRange && millis() > rangeDisplayTimeout) { displayingRange = false; }
+  
+  if (displayingVolume && currentTime > volumeDisplayTimeout) { displayingVolume = false; }
+  if (displayingRange && currentTime > rangeDisplayTimeout) { displayingRange = false; }
+  if (displayingSpeed && currentTime > speedDisplayTimeout) { displayingSpeed = false; }
+  if (displayingMode && currentTime > modeDisplayTimeout) { displayingMode = false; }
+
+  if (deltaTime > 0) {
+    lastSweepAngle = sweepAngle;
+    sweepAngle += (sweepSpeed / 1000.0) * deltaTime;
+    if (sweepAngle >= 360.0) {
+      sweepAngle = fmod(sweepAngle, 360.0);
+      xSemaphoreTake(dataMutex, portMAX_DELAY);
+      paintedThisTurn.assign(trackedAircraft.size(), false);
+      xSemaphoreGive(dataMutex);
+    }
+  }
+
   xSemaphoreTake(dataMutex, portMAX_DELAY);
   for (int i = 0; i < trackedAircraft.size(); i++) {
     if (i < paintedThisTurn.size() && !paintedThisTurn[i]) {
@@ -195,9 +273,9 @@ void loop() {
       if (bearingCrossed) {
         double angleRad = targetBearing * PI / 180.0;
         double realDistance = trackedAircraft[i].distanceKm;
-        float screenRadius = map(realDistance, 0, radarRangeKm, 0, radarRadius);
-        int16_t newBlipX = radarCenterX + screenRadius * sin(angleRad);
-        int16_t newBlipY = radarCenterY - screenRadius * cos(angleRad);
+        float screenRadius = map(realDistance, 0, radarRangeKm, 0, RADAR_RADIUS);
+        int16_t newBlipX = RADAR_CENTER_X + screenRadius * sin(angleRad);
+        int16_t newBlipY = RADAR_CENTER_Y - screenRadius * cos(angleRad);
         activeBlips.push_back({newBlipX, newBlipY, BLIP_LIFESPAN_FRAMES});
         if (activeBlips.size() > MAX_BLIPS) {
           activeBlips.erase(activeBlips.begin());
@@ -207,22 +285,16 @@ void loop() {
       }
     }
   }
+  
   for (auto it = activeBlips.begin(); it != activeBlips.end(); ) {
     it->lifespan--;
     if (it->lifespan <= 0) { it = activeBlips.erase(it); } 
     else { ++it; }
   }
   xSemaphoreGive(dataMutex);
+
   drawRadarScreen();
-  lastSweepAngle = sweepAngle;
-  sweepAngle += 4.0;
-  if (sweepAngle >= 360.0) {
-    sweepAngle = 0.0;
-    xSemaphoreTake(dataMutex, portMAX_DELAY);
-    paintedThisTurn.assign(trackedAircraft.size(), false);
-    xSemaphoreGive(dataMutex);
-  }
-  delay(10);
+  lastFrameTime = currentTime;
 }
 
 void Poweroff(String powermessage) {
@@ -241,6 +313,7 @@ void Poweroff(String powermessage) {
 void saveSettings() {
   EEPROM.put(EEPROM_ADDR_VOLUME, beepVolume);
   EEPROM.put(EEPROM_ADDR_RANGE_INDEX, rangeStepIndex);
+  EEPROM.put(EEPROM_ADDR_SPEED_INDEX, sweepSpeedIndex);
   EEPROM.write(EEPROM_ADDR_MAGIC, EEPROM_MAGIC_NUMBER);
   EEPROM.commit();
   Serial.println("Settings saved to EEPROM.");
@@ -252,23 +325,47 @@ void loadSettings() {
     Serial.println("Loading settings from EEPROM...");
     EEPROM.get(EEPROM_ADDR_VOLUME, beepVolume);
     EEPROM.get(EEPROM_ADDR_RANGE_INDEX, rangeStepIndex);
+    EEPROM.get(EEPROM_ADDR_SPEED_INDEX, sweepSpeedIndex);
     beepVolume = constrain(beepVolume, 0, 20);
     rangeStepIndex = constrain(rangeStepIndex, 0, rangeStepsCount - 1);
+    sweepSpeedIndex = constrain(sweepSpeedIndex, 0, speedStepsCount - 1);
   } else {
     Serial.println("First run or invalid EEPROM data. Setting defaults.");
     beepVolume = 10;
-    rangeStepIndex = 3; // Corresponds to 50 km
+    rangeStepIndex = 3;
+    sweepSpeedIndex = 1;
     saveSettings();
   }
   radarRangeKm = rangeSteps[rangeStepIndex];
+  sweepSpeed = sweepSpeedSteps[sweepSpeedIndex];
   Serial.printf("Loaded Volume: %d\n", beepVolume);
   Serial.printf("Loaded Range: %.0f km\n", radarRangeKm);
+  Serial.printf("Loaded Speed: %.1f deg/s\n", sweepSpeed);
 }
 
 void drawRadarScreen() {
   display.clearDisplay();
   display.setTextSize(1);
 
+  if (displayingMode) {
+    display.setCursor(20, 16);
+    display.print("Control Mode");
+    display.setTextSize(2);
+    display.setCursor(20, 32);
+    display.print(currentMode == VOLUME ? "Volume" : "Speed");
+    display.display();
+    return;
+  }
+  if (displayingSpeed) {
+    display.setCursor(20, 16);
+    display.print("Sweep Speed");
+    display.setTextSize(2);
+    display.setCursor(20, 32);
+    display.print(sweepSpeed, 0);
+    display.print(" d/s");
+    display.display();
+    return;
+  }
   if (displayingRange) {
     display.setCursor(20, 16);
     display.print("Radar Range");
@@ -302,7 +399,7 @@ void drawRadarScreen() {
   if (currentClosest.isValid) {
     display.setCursor(0, 0);
     display.print("Flt: ");
-    display.println(currentClosest.flight.isEmpty() ? "------" : currentClosest.flight.substring(0, 7));
+    display.println(strlen(currentClosest.flight) > 0 ? currentClosest.flight : "------");
     display.print("Dst: ");
     display.print(currentClosest.distanceKm, 1);
     display.println("km");
@@ -320,9 +417,22 @@ void drawRadarScreen() {
     display.print("km");
   }
 
-  display.drawCircle(radarCenterX, radarCenterY, radarRadius, SH110X_WHITE);
-  display.setCursor(radarCenterX - 3, radarCenterY - radarRadius - 9);
+  if (dataConnectionOk) {
+    // Draw Y-shaped antenna icon
+    int16_t baseX = SCREEN_WIDTH - 6;
+    int16_t baseY = 8;
+    display.drawLine(baseX, baseY, baseX, baseY - 4, SH110X_WHITE); // Mast
+    display.drawLine(baseX, baseY - 4, baseX - 3, baseY - 7, SH110X_WHITE); // Left branch
+    display.drawLine(baseX, baseY - 4, baseX + 3, baseY - 7, SH110X_WHITE); // Right branch
+  }
+
+  display.drawCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS, SH110X_WHITE);
+  display.setCursor(RADAR_CENTER_X - 3, RADAR_CENTER_Y - RADAR_RADIUS - 9);
   display.print("N");
+
+  // CHANGED: Draw inner rings with dotted style
+  drawDottedCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS * 2 / 3, SH110X_WHITE);
+  drawDottedCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS * 1 / 3, SH110X_WHITE);
 
   for (const auto& blip : currentBlips) {
     if (blip.lifespan > (BLIP_LIFESPAN_FRAMES * 2 / 3)) {
@@ -335,9 +445,9 @@ void drawRadarScreen() {
   }
 
   double sweepRad = sweepAngle * PI / 180.0;
-  int16_t sweepX = radarCenterX + (radarRadius - 1) * sin(sweepRad);
-  int16_t sweepY = radarCenterY - (radarRadius - 1) * cos(sweepRad);
-  display.drawLine(radarCenterX, radarCenterY, sweepX, sweepY, SH110X_WHITE);
+  int16_t sweepX = RADAR_CENTER_X + (RADAR_RADIUS - 1) * sin(sweepRad);
+  int16_t sweepY = RADAR_CENTER_Y - (RADAR_RADIUS - 1) * cos(sweepRad);
+  display.drawLine(RADAR_CENTER_X, RADAR_CENTER_Y, sweepX, sweepY, SH110X_WHITE);
 
   display.display();
 }
@@ -347,12 +457,21 @@ void fetchAircraft() {
   char url[160];
   snprintf(url, sizeof(url), "http://%s:%d/dump1090-fa/data/aircraft.json", DUMP1090_SERVER, DUMP1090_PORT);
 
-  if (!http.begin(url)) return;
+  if (!http.begin(url)) {
+    dataConnectionOk = false;
+    return;
+  }
 
   int httpCode = http.GET();
   if (httpCode == HTTP_CODE_OK) {
-    DynamicJsonDocument doc(30 * 1024);
-    if (deserializeJson(doc, http.getStream()) == DeserializationError::Ok) {
+    DynamicJsonDocument filter(512);
+    filter["aircraft"][0]["lat"] = true;
+    filter["aircraft"][0]["lon"] = true;
+    filter["aircraft"][0]["flight"] = true;
+
+    DynamicJsonDocument doc(4096);
+    if (deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter)) == DeserializationError::Ok) {
+      dataConnectionOk = true;
       JsonArray arr = doc["aircraft"].as<JsonArray>();
       
       std::vector<Aircraft> planesInRange;
@@ -363,11 +482,28 @@ void fetchAircraft() {
       for (JsonObject plane : arr) {
         if (plane.containsKey("lat") && plane.containsKey("lon")) {
           double dist = haversine(USER_LAT, USER_LON, plane["lat"], plane["lon"]);
+
+          if (isnan(dist) || isinf(dist)) {
+            continue;
+          }
+          
           if (dist < radarRangeKm) {
             Aircraft ac;
-            ac.flight = plane["flight"].as<String>();
+            const char* flightStr = plane["flight"].as<const char*>();
+            if (flightStr) {
+                strncpy(ac.flight, flightStr, sizeof(ac.flight) - 1);
+                ac.flight[sizeof(ac.flight) - 1] = '\0';
+            } else {
+                ac.flight[0] = '\0';
+            }
+
             ac.distanceKm = dist;
             ac.bearing = calculateBearing(USER_LAT, USER_LON, plane["lat"], plane["lon"]);
+
+            if (isnan(ac.bearing) || isinf(ac.bearing)) {
+                continue;
+            }
+
             ac.isValid = true;
             planesInRange.push_back(ac);
 
@@ -383,8 +519,11 @@ void fetchAircraft() {
       trackedAircraft = planesInRange;
       closestAircraft = newClosest;
       xSemaphoreGive(dataMutex);
+    } else {
+      dataConnectionOk = false;
     }
   } else {
+    dataConnectionOk = false;
     xSemaphoreTake(dataMutex, portMAX_DELAY);
     trackedAircraft.clear();
     closestAircraft.isValid = false;
@@ -419,3 +558,19 @@ double calculateBearing(double lat1, double lon1, double lat2, double lon2) {
   bearing = fmod((bearing * 180.0 / PI + 360.0), 360.0);
   return bearing;
 }
+
+// Custom function to draw a dotted circle for the innermost ring
+void drawDottedCircle(int16_t x0, int16_t y0, int16_t r, uint16_t color) {
+  // Iterate over 360 degrees
+  for (int i = 0; i < 360; i++) {
+    // Use modulo to create a pattern (e.g., draw a pixel every 15 degrees)
+    if (i % 15 == 0) { 
+      double angleRad = i * PI / 180.0;
+      // Use same coordinate system as radar sweep for consistency (0 deg is North/Up)
+      int16_t x = x0 + r * sin(angleRad);
+      int16_t y = y0 - r * cos(angleRad);
+      display.drawPixel(x, y, color);
+    }
+  }
+}
+
