@@ -563,8 +563,8 @@ double calculateBearing(double lat1, double lon1, double lat2, double lon2) {
 void drawDottedCircle(int16_t x0, int16_t y0, int16_t r, uint16_t color) {
   // Iterate over 360 degrees
   for (int i = 0; i < 360; i++) {
-    // Use modulo to create a pattern (e.g., draw a pixel every 15 degrees)
-    if (i % 15 == 0) { 
+    // Use modulo to create a pattern (e.g., draw a pixel every 30 degrees)
+    if (i % 30 == 0) { 
       double angleRad = i * PI / 180.0;
       // Use same coordinate system as radar sweep for consistency (0 deg is North/Up)
       int16_t x = x0 + r * sin(angleRad);
