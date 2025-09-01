@@ -1,6 +1,6 @@
 # ClosestPlane ESP32
 
-An Arduino-compatible sketch for ESP32 boards that connects to a dump1090 server, identifies the closest aircraft to your location and shows details on a 128x64 SH1106-based OLED. If the aircraft comes within 5 km an audible alert is played through a MAX98357 I2S amplifier.
+An Arduino-compatible sketch for ESP32 boards that connects to a dump1090 server and renders a sweeping radar view on a 128×64 SH1106 OLED. Aircraft within the selected range appear as blips and a short tone plays as the sweep crosses each target. Volume, radar range and sweep speed are controlled with two rotary encoders and saved to EEPROM.
 
 ## Required Libraries
 
@@ -28,7 +28,12 @@ Connect the following components to your ESP32:
 4. Compile and upload.
 
 ## Operation
-The display refreshes every few seconds showing the closest aircraft's callsign, distance and bearing. When an aircraft is closer than 5 km a short beep is generated on the audio output. Startup and diagnostic messages are printed to the serial monitor at 115200 baud to aid troubleshooting.
+- The display shows a radar sweep of aircraft within range. Each time the sweep crosses a target a short beep is produced.
+- Rotate the range encoder to adjust radar range.
+- Press the range encoder to switch the volume encoder between controlling beep volume and sweep speed.
+- Rotate the volume encoder to adjust the selected parameter.
+- Long-press the volume encoder to power off.
+- Settings persist in EEPROM and a small antenna icon indicates a good data connection.
 
 ## Building in a Codex/Codespace Environment
 
@@ -108,8 +113,9 @@ retry 5 5 arduino-cli core install esp32:esp32
 
 echo "==> Installing libraries"
 retry 5 5 arduino-cli lib install "Adafruit GFX Library"
-retry 5 5 arduino-cli lib install "Adafruit SSD1306"
+retry 5 5 arduino-cli lib install "Adafruit SH110X"
 retry 5 5 arduino-cli lib install "ArduinoJson"
+retry 5 5 arduino-cli lib install "SimpleRotary"
 
 echo "✅ Setup complete. Compile with:"
 echo "   arduino-cli compile --fqbn esp32:esp32:esp32 closestPlane.ino"
