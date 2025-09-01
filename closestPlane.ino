@@ -180,7 +180,7 @@ void loop() {
     rangeStepIndex = constrain(rangeStepIndex, 0, rangeStepsCount - 1);
     radarRangeKm = rangeSteps[rangeStepIndex];
     displayingRange = true;
-    rangeDisplayTimeout = millis() + 2000;
+    rangeDisplayTimeout = millis() + 1000;
   }
   if (displayingVolume && millis() > volumeDisplayTimeout) { displayingVolume = false; }
   if (displayingRange && millis() > rangeDisplayTimeout) { displayingRange = false; }
