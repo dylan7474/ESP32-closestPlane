@@ -10,6 +10,16 @@ Install the following libraries in the Arduino IDE before compiling:
 - **Adafruit GFX Library**
 - **Adafruit SH110X**
 - **ArduinoJson**
+- **SimpleRotary** – handles the rotary encoders for volume and range control.
+
+## Hardware Connections
+
+Connect the following components to your ESP32:
+
+- **SH1106 128×64 OLED** (I²C): SDA → GPIO21, SCL → GPIO22, plus 3.3 V and GND.
+- **MAX98357A I2S amplifier**: BCLK → GPIO17, LRCLK → GPIO16, DIN → GPIO27, SD → GPIO19, 3.3 V and GND.
+- **Volume rotary encoder**: A → GPIO33, B → GPIO4, switch → GPIO23.
+- **Range/channel rotary encoder**: A → GPIO25, B → GPIO32, switch → GPIO2.
 
 ## Setup
 1. Rename `config.h` with your WiFi credentials, dump1090 server address and your latitude/longitude. Adjust I2S pin numbers if required.
@@ -91,6 +101,7 @@ echo "==> Installing libraries"
 retry 5 5 arduino-cli lib install "Adafruit GFX Library"
 retry 5 5 arduino-cli lib install "Adafruit SH110X"
 retry 5 5 arduino-cli lib install "ArduinoJson"
+retry 5 5 arduino-cli lib install "SimpleRotary"
 
 echo "✅ Setup complete. You can compile with:"
 echo "   arduino-cli compile --fqbn esp32:esp32:esp32 closestPlane.ino"
