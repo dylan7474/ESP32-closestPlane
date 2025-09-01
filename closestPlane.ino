@@ -19,6 +19,7 @@
 #define EARTH_RADIUS_KM 6371.0
 #define BLIP_LIFESPAN_FRAMES 90
 #define MAX_BLIPS 20
+#define WIFI_CONNECT_TIMEOUT_MS 10000
 
 // EEPROM addresses and magic number for saving settings
 #define EEPROM_SIZE 64
@@ -129,12 +130,22 @@ void setup() {
   display.println("Connecting WiFi...");
   display.display();
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  while (WiFi.status() != WL_CONNECTED) {
+  unsigned long wifiStart = millis();
+  while (WiFi.status() != WL_CONNECTED &&
+         millis() - wifiStart < WIFI_CONNECT_TIMEOUT_MS) {
     delay(500);
     Serial.print('.');
   }
-  Serial.println("\nWiFi connected.");
-  WiFi.setSleep(false);
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi connected.");
+    WiFi.setSleep(false);
+  } else {
+    Serial.println("\nWiFi connection failed.");
+    display.fillRect(0, 16, SCREEN_WIDTH, 16, SH110X_BLACK);
+    display.setCursor(0, 16);
+    display.println("WiFi Failed");
+    display.display();
+  }
   i2s_config_t i2s_config = {
       .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX), .sample_rate = 44100, .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT, .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT, .communication_format = I2S_COMM_FORMAT_STAND_I2S, .intr_alloc_flags = 0, .dma_buf_count = 8, .dma_buf_len = 64, .use_apll = false, .tx_desc_auto_clear = true, .fixed_mclk = 0};
   i2s_pin_config_t pin_config = {
