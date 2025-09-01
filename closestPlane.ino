@@ -18,7 +18,7 @@
 #define SCREEN_HEIGHT 64
 #define REFRESH_INTERVAL_MS 5000
 #define WIFI_CONNECT_TIMEOUT_MS 10000
-#define DISPLAY_TIMEOUT_MS 1000 // NEW: Standardized timeout for all pop-up screens
+#define DISPLAY_TIMEOUT_MS 1000 
 
 // --- Radar Constants ---
 #define EARTH_RADIUS_KM 6371.0
@@ -76,6 +76,8 @@ struct Aircraft {
   char flight[10];
   double distanceKm;
   double bearing;
+  int altitude; 
+  float groundSpeed; 
   bool isValid;
 };
 
@@ -86,7 +88,7 @@ struct RadarBlip {
 };
 
 // --- Multi-core Shared Data ---
-Aircraft closestAircraft;
+Aircraft lastPingedAircraft; // CHANGED: Stores the last aircraft hit by the sweep
 std::vector<Aircraft> trackedAircraft;
 std::vector<RadarBlip> activeBlips;
 SemaphoreHandle_t dataMutex;
@@ -108,8 +110,16 @@ void Poweroff(String powermessage);
 double haversine(double lat1, double lon1, double lat2, double lon2);
 double calculateBearing(double lat1, double lon1, double lat2, double lon2);
 void playBeep(int freq, int duration_ms);
+int getBeepFrequencyForAltitude(int altitude); 
 double deg2rad(double deg);
 void drawDottedCircle(int16_t x0, int16_t y0, int16_t r, uint16_t color);
+
+// --- BEEP FREQUENCY BANDS ---
+#define ALT_LOW_FEET 10000
+#define ALT_HIGH_FEET 30000
+#define FREQ_LOW 800
+#define FREQ_MID 1200
+#define FREQ_HIGH 1800
 
 // --- Task for reading encoders reliably ---
 void encoderTask(void *pvParameters) {
@@ -123,6 +133,20 @@ void encoderTask(void *pvParameters) {
     byte chan_push_event = ChannelSelector.pushType(200);
     if (chan_push_event != 0) { ChannelPush = chan_push_event; }
     vTaskDelay(pdMS_TO_TICKS(5));
+  }
+}
+
+// Determines beep pitch based on altitude
+int getBeepFrequencyForAltitude(int altitude) {
+  if (altitude < 0) { // Default for unknown altitude
+    return FREQ_MID;
+  }
+  if (altitude < ALT_LOW_FEET) {
+    return FREQ_LOW;
+  } else if (altitude < ALT_HIGH_FEET) {
+    return FREQ_MID;
+  } else {
+    return FREQ_HIGH;
   }
 }
 
@@ -142,7 +166,7 @@ void setup() {
 
   loadSettings();
   dataMutex = xSemaphoreCreateMutex();
-  closestAircraft.isValid = false;
+  lastPingedAircraft.isValid = false; // CHANGED: Initialize new display variable
   
   display.begin(0x3C, true);
   display.clearDisplay();
@@ -198,7 +222,7 @@ void loop() {
   if (localChannelPush == 1) {
     currentMode = (currentMode == VOLUME) ? SPEED : VOLUME;
     displayingMode = true;
-    modeDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS; // Standardized delay
+    modeDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS;
   }
 
   if (localVolumeChange != 0) {
@@ -206,13 +230,13 @@ void loop() {
       beepVolume += (localVolumeChange == 1) ? 1 : -1;
       beepVolume = constrain(beepVolume, 0, 20);
       displayingVolume = true;
-      volumeDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS; // Standardized delay
+      volumeDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS;
     } else {
       sweepSpeedIndex += (localVolumeChange == 1) ? 1 : -1;
       sweepSpeedIndex = constrain(sweepSpeedIndex, 0, speedStepsCount - 1);
       sweepSpeed = sweepSpeedSteps[sweepSpeedIndex];
       displayingSpeed = true;
-      speedDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS; // Standardized delay
+      speedDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS;
     }
   }
   
@@ -223,25 +247,21 @@ void loop() {
     rangeStepIndex = constrain(rangeStepIndex, 0, rangeStepsCount - 1);
     radarRangeKm = rangeSteps[rangeStepIndex];
     displayingRange = true;
-    rangeDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS; // Standardized delay
+    rangeDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS;
     
     xSemaphoreTake(dataMutex, portMAX_DELAY);
     activeBlips.clear(); 
     std::vector<Aircraft> filteredAircraft;
-    Aircraft newClosest;
-    newClosest.isValid = false;
-    double minDist = radarRangeKm;
+    // REMOVED: Logic for finding closest aircraft, not needed here anymore
     for (const auto& ac : trackedAircraft) {
       if (ac.distanceKm < radarRangeKm) {
         filteredAircraft.push_back(ac);
-        if (ac.distanceKm < minDist) {
-          minDist = ac.distanceKm;
-          newClosest = ac;
-        }
       }
     }
     trackedAircraft = filteredAircraft;
-    closestAircraft = newClosest;
+    if (trackedAircraft.empty()) { // If no planes left, invalidate display
+        lastPingedAircraft.isValid = false;
+    }
     paintedThisTurn.assign(trackedAircraft.size(), false);
     xSemaphoreGive(dataMutex);
   }
@@ -280,8 +300,12 @@ void loop() {
         if (activeBlips.size() > MAX_BLIPS) {
           activeBlips.erase(activeBlips.begin());
         }
+        
+        lastPingedAircraft = trackedAircraft[i]; // NEW: Update display data with current aircraft
+        
         paintedThisTurn[i] = true;
-        playBeep(1000, 20);
+        int freq = getBeepFrequencyForAltitude(trackedAircraft[i].altitude);
+        playBeep(freq, 20);
       }
     }
   }
@@ -386,26 +410,37 @@ void drawRadarScreen() {
     return;
   }
 
-  Aircraft currentClosest;
-  int targetCount = 0;
+  Aircraft currentAircraftToDisplay; // CHANGED
   std::vector<RadarBlip> currentBlips;
 
   xSemaphoreTake(dataMutex, portMAX_DELAY);
-  currentClosest = closestAircraft;
-  targetCount = trackedAircraft.size();
+  currentAircraftToDisplay = lastPingedAircraft; // CHANGED: Get last pinged aircraft
   currentBlips = activeBlips;
   xSemaphoreGive(dataMutex);
 
-  if (currentClosest.isValid) {
+  // CHANGED: All display logic now uses currentAircraftToDisplay
+  if (currentAircraftToDisplay.isValid) {
     display.setCursor(0, 0);
     display.print("Flt: ");
-    display.println(strlen(currentClosest.flight) > 0 ? currentClosest.flight : "------");
+    display.println(strlen(currentAircraftToDisplay.flight) > 0 ? currentAircraftToDisplay.flight : "------");
     display.print("Dst: ");
-    display.print(currentClosest.distanceKm, 1);
+    display.print(currentAircraftToDisplay.distanceKm, 1);
     display.println("km");
-    display.print("Trgts:");
-    display.println(targetCount);
-    display.print("Range:");
+    display.print("Alt: ");
+    if (currentAircraftToDisplay.altitude >= 0) {
+      display.print(currentAircraftToDisplay.altitude);
+      display.println("ft");
+    } else {
+      display.println("-----");
+    }
+    display.print("Spd: ");
+    if (currentAircraftToDisplay.groundSpeed >= 0) {
+        display.print(currentAircraftToDisplay.groundSpeed, 0);
+        display.println("kt");
+    } else {
+        display.println("---");
+    }
+    display.print("Rng: ");
     display.print(radarRangeKm, 0);
     display.print("km");
   } else {
@@ -418,19 +453,17 @@ void drawRadarScreen() {
   }
 
   if (dataConnectionOk) {
-    // Draw Y-shaped antenna icon
     int16_t baseX = SCREEN_WIDTH - 6;
     int16_t baseY = 8;
-    display.drawLine(baseX, baseY, baseX, baseY - 4, SH110X_WHITE); // Mast
-    display.drawLine(baseX, baseY - 4, baseX - 3, baseY - 7, SH110X_WHITE); // Left branch
-    display.drawLine(baseX, baseY - 4, baseX + 3, baseY - 7, SH110X_WHITE); // Right branch
+    display.drawLine(baseX, baseY, baseX, baseY - 4, SH110X_WHITE); 
+    display.drawLine(baseX, baseY - 4, baseX - 3, baseY - 7, SH110X_WHITE);
+    display.drawLine(baseX, baseY - 4, baseX + 3, baseY - 7, SH110X_WHITE);
   }
 
   display.drawCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS, SH110X_WHITE);
   display.setCursor(RADAR_CENTER_X - 3, RADAR_CENTER_Y - RADAR_RADIUS - 9);
   display.print("N");
 
-  // CHANGED: Draw inner rings with dotted style
   drawDottedCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS * 2 / 3, SH110X_WHITE);
   drawDottedCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS * 1 / 3, SH110X_WHITE);
 
@@ -468,16 +501,16 @@ void fetchAircraft() {
     filter["aircraft"][0]["lat"] = true;
     filter["aircraft"][0]["lon"] = true;
     filter["aircraft"][0]["flight"] = true;
+    filter["aircraft"][0]["alt_baro"] = true; 
+    filter["aircraft"][0]["gs"] = true; 
 
-    DynamicJsonDocument doc(4096);
+    DynamicJsonDocument doc(8192); 
     if (deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter)) == DeserializationError::Ok) {
       dataConnectionOk = true;
       JsonArray arr = doc["aircraft"].as<JsonArray>();
       
       std::vector<Aircraft> planesInRange;
-      Aircraft newClosest;
-      newClosest.isValid = false;
-      double minDist = radarRangeKm;
+      // REMOVED: Logic for finding closest aircraft, not needed anymore
       
       for (JsonObject plane : arr) {
         if (plane.containsKey("lat") && plane.containsKey("lon")) {
@@ -499,6 +532,25 @@ void fetchAircraft() {
 
             ac.distanceKm = dist;
             ac.bearing = calculateBearing(USER_LAT, USER_LON, plane["lat"], plane["lon"]);
+            
+            if (plane.containsKey("alt_baro")) {
+              JsonVariant alt = plane["alt_baro"];
+              if (alt.is<int>()) {
+                ac.altitude = alt.as<int>();
+              } else if (alt.is<const char*>() && strcmp(alt.as<const char*>(), "ground") == 0) {
+                ac.altitude = 0;
+              } else {
+                ac.altitude = -1;
+              }
+            } else {
+                ac.altitude = -1;
+            }
+
+            if (plane.containsKey("gs")) {
+                ac.groundSpeed = plane["gs"].as<float>();
+            } else {
+                ac.groundSpeed = -1.0;
+            }
 
             if (isnan(ac.bearing) || isinf(ac.bearing)) {
                 continue;
@@ -506,18 +558,13 @@ void fetchAircraft() {
 
             ac.isValid = true;
             planesInRange.push_back(ac);
-
-            if (dist < minDist) {
-              minDist = dist;
-              newClosest = ac;
-            }
           }
         }
       }
 
       xSemaphoreTake(dataMutex, portMAX_DELAY);
       trackedAircraft = planesInRange;
-      closestAircraft = newClosest;
+      // REMOVED: No longer need to update closestAircraft
       xSemaphoreGive(dataMutex);
     } else {
       dataConnectionOk = false;
@@ -526,7 +573,7 @@ void fetchAircraft() {
     dataConnectionOk = false;
     xSemaphoreTake(dataMutex, portMAX_DELAY);
     trackedAircraft.clear();
-    closestAircraft.isValid = false;
+    lastPingedAircraft.isValid = false; // Invalidate display on connection loss
     xSemaphoreGive(dataMutex);
   }
   http.end();
@@ -559,14 +606,11 @@ double calculateBearing(double lat1, double lon1, double lat2, double lon2) {
   return bearing;
 }
 
-// Custom function to draw a dotted circle for the innermost ring
+// Custom function to draw a dotted circle
 void drawDottedCircle(int16_t x0, int16_t y0, int16_t r, uint16_t color) {
-  // Iterate over 360 degrees
   for (int i = 0; i < 360; i++) {
-    // Use modulo to create a pattern (e.g., draw a pixel every 30 degrees)
     if (i % 30 == 0) { 
       double angleRad = i * PI / 180.0;
-      // Use same coordinate system as radar sweep for consistency (0 deg is North/Up)
       int16_t x = x0 + r * sin(angleRad);
       int16_t y = y0 - r * cos(angleRad);
       display.drawPixel(x, y, color);
