@@ -172,7 +172,7 @@ void loop() {
     beepVolume += (localVolumeChange == 1) ? 1 : -1;
     beepVolume = constrain(beepVolume, 0, 20);
     displayingVolume = true;
-    volumeDisplayTimeout = millis() + 2000;
+    volumeDisplayTimeout = millis() + 500;
   }
   if (localVolumePush == 2) { Poweroff("Goodbye"); }
   if (localChannelChange != 0) {
@@ -180,7 +180,7 @@ void loop() {
     rangeStepIndex = constrain(rangeStepIndex, 0, rangeStepsCount - 1);
     radarRangeKm = rangeSteps[rangeStepIndex];
     displayingRange = true;
-    rangeDisplayTimeout = millis() + 1000;
+    rangeDisplayTimeout = millis() + 500;
   }
   if (displayingVolume && millis() > volumeDisplayTimeout) { displayingVolume = false; }
   if (displayingRange && millis() > rangeDisplayTimeout) { displayingRange = false; }
