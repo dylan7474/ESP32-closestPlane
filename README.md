@@ -113,18 +113,12 @@ retry 5 5 arduino-cli core install esp32:esp32
 
 echo "==> Installing libraries"
 retry 5 5 arduino-cli lib install "Adafruit GFX Library"
-retry 5 5 arduino-cli lib install "Adafruit SH110X"
 retry 5 5 arduino-cli lib install "ArduinoJson"
-retry 5 5 arduino-cli lib install "SimpleRotary"
+retry 5 5 arduino-cli lib install "Adafruit SH110X"
+retry 5 5 arduino-cli lib install SimpleRotary
 
 echo "✅ Setup complete. Compile with:"
 echo "   arduino-cli compile --fqbn esp32:esp32:esp32 closestPlane.ino"
-```
-
-This repository also includes the setup script above as `CodexEnvironment`. Run `./CodexEnvironment` in a Codex or Codespace container to install all dependencies. After setup, verify the build with:
-
-```bash
-arduino-cli compile --fqbn esp32:esp32:esp32 closestPlane.ino
 ```
 
 The command completes successfully when the required libraries (Adafruit SH110X, SimpleRotary, etc.) are installed.
