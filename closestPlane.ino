@@ -71,6 +71,13 @@ unsigned long speedDisplayTimeout = 0;
 bool displayingMode = false;
 unsigned long modeDisplayTimeout = 0;
 
+// --- Battery Monitoring ---
+float voltage = 0;
+float batteryVoltage = 3.7;
+int prevReading = 0;
+int smoothingFactor = 200;
+int LowPowerScore = 0;
+
 // --- Data Structs ---
 struct Aircraft {
   char flight[10];
@@ -110,9 +117,10 @@ void Poweroff(String powermessage);
 double haversine(double lat1, double lon1, double lat2, double lon2);
 double calculateBearing(double lat1, double lon1, double lat2, double lon2);
 void playBeep(int freq, int duration_ms);
-int getBeepFrequencyForAltitude(int altitude); 
+int getBeepFrequencyForAltitude(int altitude);
 double deg2rad(double deg);
 void drawDottedCircle(int16_t x0, int16_t y0, int16_t r, uint16_t color);
+void drawBatteryIndicator();
 
 // --- BEEP FREQUENCY BANDS ---
 #define ALT_LOW_FEET 10000
@@ -163,6 +171,10 @@ void setup() {
   digitalWrite(19, HIGH);
   Serial.begin(115200);
   Serial.println("Booting Multi-Target Radar (Enhanced)");
+
+  analogSetAttenuation(ADC_11db);
+  analogSetWidth(9);
+  pinMode(34, INPUT);
 
   loadSettings();
   dataMutex = xSemaphoreCreateMutex();
@@ -218,6 +230,19 @@ void loop() {
   if (localVolumePush != 0) VolumePush = 0;
   if (localChannelChange != 0) ChannelChange = 0;
   if (localChannelPush != 0) ChannelPush = 0;
+
+  int reading = analogRead(34);
+  prevReading = (prevReading * (smoothingFactor - 1) + reading) / smoothingFactor;
+  voltage = prevReading / 510.11;
+  batteryVoltage = round(voltage * 10) / 10.0;
+  if (batteryVoltage < 3.4) {
+    LowPowerScore++;
+    if (LowPowerScore > 2000) {
+      Poweroff(String("Battery ") + String(batteryVoltage));
+    }
+  } else if (LowPowerScore > 0) {
+    LowPowerScore--;
+  }
 
   if (localChannelPush == 1) {
     currentMode = (currentMode == VOLUME) ? SPEED : VOLUME;
@@ -367,9 +392,25 @@ void loadSettings() {
   Serial.printf("Loaded Speed: %.1f deg/s\n", sweepSpeed);
 }
 
+void drawBatteryIndicator() {
+  float minVoltage = 3.2;
+  float maxVoltage = 4.2;
+  int batteryBarWidth = 24;
+  int batteryBarHeight = 8;
+  int batteryXPos = SCREEN_WIDTH - batteryBarWidth - 12;
+  int batteryYPos = 0;
+  int batteryFilledWidth = (int)((batteryVoltage - minVoltage) / (maxVoltage - minVoltage) * batteryBarWidth);
+  batteryFilledWidth = constrain(batteryFilledWidth, 0, batteryBarWidth);
+  display.drawRoundRect(batteryXPos, batteryYPos, batteryBarWidth, batteryBarHeight, 2, SH110X_WHITE);
+  if (batteryFilledWidth > 0) {
+    display.fillRect(batteryXPos, batteryYPos, batteryFilledWidth, batteryBarHeight, SH110X_WHITE);
+  }
+}
+
 void drawRadarScreen() {
   display.clearDisplay();
   display.setTextSize(1);
+  drawBatteryIndicator();
 
   if (displayingMode) {
     display.setCursor(20, 16);
