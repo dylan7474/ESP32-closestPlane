@@ -35,8 +35,7 @@ Connect the following components to your ESP32:
 - Rotate the volume encoder to adjust the selected parameter.
 - Long-press the volume encoder to power off.
 - Settings persist in EEPROM and a small antenna icon indicates a good data connection.
-- A battery bar shows remaining charge and the unit shuts down automatically if the voltage drops too low.
-- Battery checks begin ~5 s after power-up to allow the voltage reading to stabilise.
+- A battery bar shows remaining charge.
 
 ## Building in a Codex/Codespace Environment
 
