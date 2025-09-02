@@ -21,6 +21,7 @@
 #define DISPLAY_TIMEOUT_MS 1000
 #define BATTERY_ADC_PIN 34
 #define LOW_BATTERY_VOLTAGE 3.4
+#define BATTERY_STABILIZE_MS 5000
 
 // --- Radar Constants ---
 #define EARTH_RADIUS_KM 6371.0
@@ -79,6 +80,8 @@ float batteryVoltage = 3.7f;
 int prevReading = 0;
 const int smoothingFactor = 200;
 int LowPowerScore = 0;
+unsigned long bootTime = 0;
+bool batteryCheckEnabled = false;
 
 // --- Data Structs ---
 struct Aircraft {
@@ -175,6 +178,7 @@ void setup() {
 
   analogSetAttenuation(ADC_11db);
   analogSetWidth(9);
+  bootTime = millis();
 
   loadSettings();
   dataMutex = xSemaphoreCreateMutex();
@@ -222,17 +226,25 @@ void loop() {
   unsigned long currentTime = millis();
   unsigned long deltaTime = currentTime - lastFrameTime;
 
+  if (!batteryCheckEnabled && currentTime - bootTime > BATTERY_STABILIZE_MS) {
+    batteryCheckEnabled = true;
+    LowPowerScore = 0; // reset after stabilization
+  }
+
   int reading = analogRead(BATTERY_ADC_PIN);
   prevReading = (prevReading * (smoothingFactor - 1) + reading) / smoothingFactor;
   voltage = prevReading / 510.11;
   batteryVoltage = round(voltage * 10) / 10.0;
-  if (batteryVoltage < LOW_BATTERY_VOLTAGE) {
-    LowPowerScore++;
-  } else if (LowPowerScore > 0) {
-    LowPowerScore--;
-  }
-  if (LowPowerScore > 2000) {
-    Poweroff("Battery Low");
+
+  if (batteryCheckEnabled) {
+    if (batteryVoltage < LOW_BATTERY_VOLTAGE) {
+      LowPowerScore++;
+    } else if (LowPowerScore > 0) {
+      LowPowerScore--;
+    }
+    if (LowPowerScore > 2000) {
+      Poweroff("Battery Low");
+    }
   }
 
   byte localVolumeChange = VolumeChange;
