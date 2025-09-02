@@ -608,13 +608,11 @@ double calculateBearing(double lat1, double lon1, double lat2, double lon2) {
 
 // Custom function to draw a dotted circle
 void drawDottedCircle(int16_t x0, int16_t y0, int16_t r, uint16_t color) {
-  for (int i = 0; i < 360; i++) {
-    if (i % 30 == 0) { 
-      double angleRad = i * PI / 180.0;
-      int16_t x = x0 + r * sin(angleRad);
-      int16_t y = y0 - r * cos(angleRad);
-      display.drawPixel(x, y, color);
-    }
+  for (int i = 0; i < 360; i += 30) {
+    double angleRad = i * PI / 180.0;
+    int16_t x = x0 + r * sin(angleRad);
+    int16_t y = y0 - r * cos(angleRad);
+    display.drawPixel(x, y, color);
   }
 }
 
