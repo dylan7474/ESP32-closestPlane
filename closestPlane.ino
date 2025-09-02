@@ -240,7 +240,7 @@ void loop() {
     }
   }
   
-  if (localVolumePush == 2) { Poweroff("Goodbye"); }
+  if (localVolumePush == 2) { Poweroff("  Goodbye"); }
   
   if (localChannelChange != 0) {
     rangeStepIndex += (localChannelChange == 1) ? 1 : -1;
