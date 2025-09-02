@@ -115,7 +115,7 @@ echo "==> Installing libraries"
 retry 5 5 arduino-cli lib install "Adafruit GFX Library"
 retry 5 5 arduino-cli lib install "ArduinoJson"
 retry 5 5 arduino-cli lib install "Adafruit SH110X"
-retry 5 5 arduino-cli lib install SimpleRotary
+retry 5 5 arduino-cli lib install "SimpleRotary"
 
 echo "✅ Setup complete. Compile with:"
 echo "   arduino-cli compile --fqbn esp32:esp32:esp32 closestPlane.ino"
