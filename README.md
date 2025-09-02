@@ -20,6 +20,7 @@ Connect the following components to your ESP32:
 - **MAX98357A I2S amplifier**: BCLK → GPIO17, LRCLK → GPIO16, DIN → GPIO27, SD → GPIO19, 3.3 V and GND.
 - **Volume rotary encoder**: A → GPIO33, B → GPIO4, switch → GPIO23.
 - **Range/channel rotary encoder**: A → GPIO25, B → GPIO32, switch → GPIO2.
+- **Battery monitor**: connect a voltage divider to GPIO34 for battery sensing.
 
 ## Setup
 1. Rename `config.h` with your WiFi credentials, dump1090 server address and your latitude/longitude. Adjust I2S pin numbers if required.
@@ -34,6 +35,7 @@ Connect the following components to your ESP32:
 - Rotate the volume encoder to adjust the selected parameter.
 - Long-press the volume encoder to power off.
 - Settings persist in EEPROM and a small antenna icon indicates a good data connection.
+- A battery bar shows remaining charge and the unit shuts down automatically if the voltage drops too low.
 
 ## Building in a Codex/Codespace Environment
 

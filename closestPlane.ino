@@ -18,7 +18,9 @@
 #define SCREEN_HEIGHT 64
 #define REFRESH_INTERVAL_MS 5000
 #define WIFI_CONNECT_TIMEOUT_MS 10000
-#define DISPLAY_TIMEOUT_MS 1000 
+#define DISPLAY_TIMEOUT_MS 1000
+#define BATTERY_ADC_PIN 34
+#define LOW_BATTERY_VOLTAGE 3.4
 
 // --- Radar Constants ---
 #define EARTH_RADIUS_KM 6371.0
@@ -70,6 +72,13 @@ bool displayingSpeed = false;
 unsigned long speedDisplayTimeout = 0;
 bool displayingMode = false;
 unsigned long modeDisplayTimeout = 0;
+
+// --- Battery Monitoring ---
+float voltage = 0.0f;
+float batteryVoltage = 3.7f;
+int prevReading = 0;
+const int smoothingFactor = 200;
+int LowPowerScore = 0;
 
 // --- Data Structs ---
 struct Aircraft {
@@ -164,6 +173,9 @@ void setup() {
   Serial.begin(115200);
   Serial.println("Booting Multi-Target Radar (Enhanced)");
 
+  analogSetAttenuation(ADC_11db);
+  analogSetWidth(9);
+
   loadSettings();
   dataMutex = xSemaphoreCreateMutex();
   lastPingedAircraft.isValid = false; // CHANGED: Initialize new display variable
@@ -209,6 +221,19 @@ void setup() {
 void loop() {
   unsigned long currentTime = millis();
   unsigned long deltaTime = currentTime - lastFrameTime;
+
+  int reading = analogRead(BATTERY_ADC_PIN);
+  prevReading = (prevReading * (smoothingFactor - 1) + reading) / smoothingFactor;
+  voltage = prevReading / 510.11;
+  batteryVoltage = round(voltage * 10) / 10.0;
+  if (batteryVoltage < LOW_BATTERY_VOLTAGE) {
+    LowPowerScore++;
+  } else if (LowPowerScore > 0) {
+    LowPowerScore--;
+  }
+  if (LowPowerScore > 2000) {
+    Poweroff("Battery Low");
+  }
 
   byte localVolumeChange = VolumeChange;
   byte localVolumePush = VolumePush;
@@ -452,10 +477,23 @@ void drawRadarScreen() {
     display.print("km");
   }
 
+  float minVoltage = 3.2;
+  float maxVoltage = 4.2;
+  int batteryBarWidth = 20;
+  int batteryBarHeight = 8;
+  int batteryXPos = SCREEN_WIDTH - batteryBarWidth - 8;
+  int batteryYPos = 0;
+  int batteryFilledWidth = (int)((batteryVoltage - minVoltage) / (maxVoltage - minVoltage) * batteryBarWidth);
+  batteryFilledWidth = constrain(batteryFilledWidth, 0, batteryBarWidth);
+  display.drawRect(batteryXPos, batteryYPos, batteryBarWidth, batteryBarHeight, SH110X_WHITE);
+  if (batteryFilledWidth > 0) {
+    display.fillRect(batteryXPos, batteryYPos, batteryFilledWidth, batteryBarHeight, SH110X_WHITE);
+  }
+
   if (dataConnectionOk) {
     int16_t baseX = SCREEN_WIDTH - 6;
     int16_t baseY = 8;
-    display.drawLine(baseX, baseY, baseX, baseY - 4, SH110X_WHITE); 
+    display.drawLine(baseX, baseY, baseX, baseY - 4, SH110X_WHITE);
     display.drawLine(baseX, baseY - 4, baseX - 3, baseY - 7, SH110X_WHITE);
     display.drawLine(baseX, baseY - 4, baseX + 3, baseY - 7, SH110X_WHITE);
   }
