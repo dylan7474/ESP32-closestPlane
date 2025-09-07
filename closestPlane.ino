@@ -123,7 +123,8 @@ void Poweroff(String powermessage);
 double haversine(double lat1, double lon1, double lat2, double lon2);
 double calculateBearing(double lat1, double lon1, double lat2, double lon2);
 void playBeep(int freq, int duration_ms);
-int getBeepFrequencyForAltitude(int altitude); 
+void playSiren(int startFreq, int endFreq, int duration_ms);
+int getBeepFrequencyForAltitude(int altitude);
 double deg2rad(double deg);
 void drawDottedCircle(int16_t x0, int16_t y0, int16_t r, uint16_t color);
 
@@ -633,7 +634,7 @@ void fetchAircraft() {
                 bool already = std::find(alertedFlights.begin(), alertedFlights.end(), String(ac.flight)) != alertedFlights.end();
                 if (!already) {
                   alertedFlights.push_back(String(ac.flight));
-                  playBeep(1800, 100);
+                  playSiren(800, 1800, 500);
                 }
               } else {
                 auto it = std::find(alertedFlights.begin(), alertedFlights.end(), String(ac.flight));
@@ -678,6 +679,19 @@ void playBeep(int freq, int duration_ms) {
   long amplitude = map(beepVolume, 0, 20, 0, 25000);
   const int sampleRate = 44100; int samples = sampleRate * duration_ms / 1000; size_t bytes_written;
   for (int i = 0; i < samples; i++) {
+    int16_t sample = (int16_t)(sin(2 * PI * freq * i / sampleRate) * amplitude);
+    i2s_write(I2S_NUM_0, &sample, sizeof(sample), &bytes_written, portMAX_DELAY);
+  }
+}
+
+void playSiren(int startFreq, int endFreq, int duration_ms) {
+  long amplitude = map(beepVolume, 0, 20, 0, 25000);
+  const int sampleRate = 44100;
+  int samples = sampleRate * duration_ms / 1000;
+  size_t bytes_written;
+  for (int i = 0; i < samples; i++) {
+    float progress = (float)i / samples;
+    float freq = startFreq + (endFreq - startFreq) * progress;
     int16_t sample = (int16_t)(sin(2 * PI * freq * i / sampleRate) * amplitude);
     i2s_write(I2S_NUM_0, &sample, sizeof(sample), &bytes_written, portMAX_DELAY);
   }
