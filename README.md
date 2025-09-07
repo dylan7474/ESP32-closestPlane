@@ -35,6 +35,8 @@ Connect the following components to your ESP32:
 - Long-press the volume encoder to power off.
 - Settings persist in EEPROM and a small antenna icon indicates a good data connection.
 - Aircraft predicted to pass within the alert radius flash on the radar and trigger a single alert tone. The display shows minutes until the closest inbound aircraft reaches minimum distance.
+- Each aircraft is tracked individually in an `alertedFlights` list so it will only trigger the siren once while inbound.
+- The alarm sounds again only if that aircraft leaves the inbound zone (bearing difference over 90° or cross-track distance beyond the alert radius) and later re-enters, or if a different aircraft meets the inbound criteria.
 
 ## Building in a Codex/Codespace Environment
 
