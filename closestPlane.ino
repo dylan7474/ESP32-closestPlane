@@ -10,6 +10,7 @@
 #include <math.h>
 #include <vector>
 #include <EEPROM.h>
+#include <algorithm>
 
 #include "config.h"
 
@@ -34,6 +35,7 @@
 #define EEPROM_ADDR_VOLUME 4
 #define EEPROM_ADDR_RANGE_INDEX 8
 #define EEPROM_ADDR_SPEED_INDEX 12
+#define EEPROM_ADDR_ALERT_DIST 16
 #define EEPROM_MAGIC_NUMBER 0xAD
 
 // --- Display & Rotary Objects ---
@@ -47,7 +49,7 @@ volatile byte ChannelChange = 0, ChannelPush = 0;
 volatile bool dataConnectionOk = false;
 
 // --- Control State Machine ---
-enum ControlMode { VOLUME, SPEED };
+enum ControlMode { VOLUME, SPEED, ALERT };
 ControlMode currentMode = VOLUME;
 
 // --- Control Variables ---
@@ -71,13 +73,21 @@ unsigned long speedDisplayTimeout = 0;
 bool displayingMode = false;
 unsigned long modeDisplayTimeout = 0;
 
+#define INBOUND_ALERT_DISTANCE_KM 5.0
+float inboundAlertDistanceKm;
+bool displayingAlertDistance = false;
+unsigned long alertDisplayTimeout = 0;
+
 // --- Data Structs ---
 struct Aircraft {
   char flight[10];
   double distanceKm;
   double bearing;
-  int altitude; 
-  float groundSpeed; 
+  int altitude;
+  float groundSpeed;
+  float track;
+  bool isInbound;
+  float minutesToClosest;
   bool isValid;
 };
 
@@ -85,6 +95,7 @@ struct RadarBlip {
   int16_t x;
   int16_t y;
   int lifespan;
+  bool inbound;
 };
 
 // --- Multi-core Shared Data ---
@@ -92,6 +103,8 @@ Aircraft lastPingedAircraft; // CHANGED: Stores the last aircraft hit by the swe
 std::vector<Aircraft> trackedAircraft;
 std::vector<RadarBlip> activeBlips;
 SemaphoreHandle_t dataMutex;
+Aircraft closestInboundAircraft;
+std::vector<String> alertedFlights;
 
 // --- Animation Variables ---
 float sweepAngle = 0.0;
@@ -167,6 +180,8 @@ void setup() {
   loadSettings();
   dataMutex = xSemaphoreCreateMutex();
   lastPingedAircraft.isValid = false; // CHANGED: Initialize new display variable
+  closestInboundAircraft.isInbound = false;
+  closestInboundAircraft.isValid = false;
   
   display.begin(0x3C, true);
   display.clearDisplay();
@@ -220,7 +235,9 @@ void loop() {
   if (localChannelPush != 0) ChannelPush = 0;
 
   if (localChannelPush == 1) {
-    currentMode = (currentMode == VOLUME) ? SPEED : VOLUME;
+    if (currentMode == VOLUME) currentMode = SPEED;
+    else if (currentMode == SPEED) currentMode = ALERT;
+    else currentMode = VOLUME;
     displayingMode = true;
     modeDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS;
   }
@@ -231,12 +248,17 @@ void loop() {
       beepVolume = constrain(beepVolume, 0, 20);
       displayingVolume = true;
       volumeDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS;
-    } else {
+    } else if (currentMode == SPEED) {
       sweepSpeedIndex += (localVolumeChange == 1) ? 1 : -1;
       sweepSpeedIndex = constrain(sweepSpeedIndex, 0, speedStepsCount - 1);
       sweepSpeed = sweepSpeedSteps[sweepSpeedIndex];
       displayingSpeed = true;
       speedDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS;
+    } else {
+      inboundAlertDistanceKm += (localVolumeChange == 1) ? 1 : -1;
+      inboundAlertDistanceKm = constrain(inboundAlertDistanceKm, 1.0, 50.0);
+      displayingAlertDistance = true;
+      alertDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS;
     }
   }
   
@@ -270,6 +292,7 @@ void loop() {
   if (displayingRange && currentTime > rangeDisplayTimeout) { displayingRange = false; }
   if (displayingSpeed && currentTime > speedDisplayTimeout) { displayingSpeed = false; }
   if (displayingMode && currentTime > modeDisplayTimeout) { displayingMode = false; }
+  if (displayingAlertDistance && currentTime > alertDisplayTimeout) { displayingAlertDistance = false; }
 
   if (deltaTime > 0) {
     lastSweepAngle = sweepAngle;
@@ -296,7 +319,7 @@ void loop() {
         float screenRadius = map(realDistance, 0, radarRangeKm, 0, RADAR_RADIUS);
         int16_t newBlipX = RADAR_CENTER_X + screenRadius * sin(angleRad);
         int16_t newBlipY = RADAR_CENTER_Y - screenRadius * cos(angleRad);
-        activeBlips.push_back({newBlipX, newBlipY, BLIP_LIFESPAN_FRAMES});
+        activeBlips.push_back({newBlipX, newBlipY, BLIP_LIFESPAN_FRAMES, trackedAircraft[i].isInbound});
         if (activeBlips.size() > MAX_BLIPS) {
           activeBlips.erase(activeBlips.begin());
         }
@@ -338,6 +361,7 @@ void saveSettings() {
   EEPROM.put(EEPROM_ADDR_VOLUME, beepVolume);
   EEPROM.put(EEPROM_ADDR_RANGE_INDEX, rangeStepIndex);
   EEPROM.put(EEPROM_ADDR_SPEED_INDEX, sweepSpeedIndex);
+  EEPROM.put(EEPROM_ADDR_ALERT_DIST, inboundAlertDistanceKm);
   EEPROM.write(EEPROM_ADDR_MAGIC, EEPROM_MAGIC_NUMBER);
   EEPROM.commit();
   Serial.println("Settings saved to EEPROM.");
@@ -350,14 +374,17 @@ void loadSettings() {
     EEPROM.get(EEPROM_ADDR_VOLUME, beepVolume);
     EEPROM.get(EEPROM_ADDR_RANGE_INDEX, rangeStepIndex);
     EEPROM.get(EEPROM_ADDR_SPEED_INDEX, sweepSpeedIndex);
+    EEPROM.get(EEPROM_ADDR_ALERT_DIST, inboundAlertDistanceKm);
     beepVolume = constrain(beepVolume, 0, 20);
     rangeStepIndex = constrain(rangeStepIndex, 0, rangeStepsCount - 1);
     sweepSpeedIndex = constrain(sweepSpeedIndex, 0, speedStepsCount - 1);
+    inboundAlertDistanceKm = constrain(inboundAlertDistanceKm, 1.0f, 50.0f);
   } else {
     Serial.println("First run or invalid EEPROM data. Setting defaults.");
     beepVolume = 10;
     rangeStepIndex = 3;
     sweepSpeedIndex = 1;
+    inboundAlertDistanceKm = INBOUND_ALERT_DISTANCE_KM;
     saveSettings();
   }
   radarRangeKm = rangeSteps[rangeStepIndex];
@@ -365,6 +392,7 @@ void loadSettings() {
   Serial.printf("Loaded Volume: %d\n", beepVolume);
   Serial.printf("Loaded Range: %.0f km\n", radarRangeKm);
   Serial.printf("Loaded Speed: %.1f deg/s\n", sweepSpeed);
+  Serial.printf("Loaded Alert Dist: %.1f km\n", inboundAlertDistanceKm);
 }
 
 void drawRadarScreen() {
@@ -376,7 +404,9 @@ void drawRadarScreen() {
     display.print("Control Mode");
     display.setTextSize(2);
     display.setCursor(20, 32);
-    display.print(currentMode == VOLUME ? "Volume" : "Speed");
+    if (currentMode == VOLUME) display.print("Volume");
+    else if (currentMode == SPEED) display.print("Speed");
+    else display.print("Alert");
     display.display();
     return;
   }
@@ -409,13 +439,25 @@ void drawRadarScreen() {
     display.display();
     return;
   }
+  if (displayingAlertDistance) {
+    display.setCursor(20, 16);
+    display.print("Alert Dist");
+    display.setTextSize(2);
+    display.setCursor(20, 32);
+    display.print(inboundAlertDistanceKm, 0);
+    display.print(" km");
+    display.display();
+    return;
+  }
 
   Aircraft currentAircraftToDisplay; // CHANGED
+  Aircraft currentClosestInbound;
   std::vector<RadarBlip> currentBlips;
 
   xSemaphoreTake(dataMutex, portMAX_DELAY);
   currentAircraftToDisplay = lastPingedAircraft; // CHANGED: Get last pinged aircraft
   currentBlips = activeBlips;
+  currentClosestInbound = closestInboundAircraft;
   xSemaphoreGive(dataMutex);
 
   // CHANGED: All display logic now uses currentAircraftToDisplay
@@ -452,6 +494,13 @@ void drawRadarScreen() {
     display.print("km");
   }
 
+  if (currentClosestInbound.isInbound && currentClosestInbound.minutesToClosest >= 0) {
+    display.setCursor(0, 56);
+    display.print("ETA: ");
+    display.print(currentClosestInbound.minutesToClosest, 1);
+    display.print("m");
+  }
+
   if (dataConnectionOk) {
     int16_t baseX = SCREEN_WIDTH - 6;
     int16_t baseY = 8;
@@ -467,7 +516,9 @@ void drawRadarScreen() {
   drawDottedCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS * 2 / 3, SH110X_WHITE);
   drawDottedCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS * 1 / 3, SH110X_WHITE);
 
+  unsigned long flashPhase = millis() / 300;
   for (const auto& blip : currentBlips) {
+    if (blip.inbound && (flashPhase % 2)) continue;
     if (blip.lifespan > (BLIP_LIFESPAN_FRAMES * 2 / 3)) {
       display.fillCircle(blip.x, blip.y, 3, SH110X_WHITE);
     } else if (blip.lifespan > (BLIP_LIFESPAN_FRAMES * 1 / 3)) {
@@ -501,8 +552,9 @@ void fetchAircraft() {
     filter["aircraft"][0]["lat"] = true;
     filter["aircraft"][0]["lon"] = true;
     filter["aircraft"][0]["flight"] = true;
-    filter["aircraft"][0]["alt_baro"] = true; 
-    filter["aircraft"][0]["gs"] = true; 
+    filter["aircraft"][0]["alt_baro"] = true;
+    filter["aircraft"][0]["gs"] = true;
+    filter["aircraft"][0]["track"] = true;
 
     DynamicJsonDocument doc(8192); 
     if (deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter)) == DeserializationError::Ok) {
@@ -510,8 +562,10 @@ void fetchAircraft() {
       JsonArray arr = doc["aircraft"].as<JsonArray>();
       
       std::vector<Aircraft> planesInRange;
-      // REMOVED: Logic for finding closest aircraft, not needed anymore
-      
+      Aircraft bestInbound;
+      bestInbound.isInbound = false;
+      bestInbound.isValid = false;
+
       for (JsonObject plane : arr) {
         if (plane.containsKey("lat") && plane.containsKey("lon")) {
           double dist = haversine(USER_LAT, USER_LON, plane["lat"], plane["lon"]);
@@ -551,20 +605,61 @@ void fetchAircraft() {
             } else {
                 ac.groundSpeed = -1.0;
             }
+            if (plane.containsKey("track")) {
+                ac.track = plane["track"].as<float>();
+            } else {
+                ac.track = -1.0;
+            }
 
             if (isnan(ac.bearing) || isinf(ac.bearing)) {
                 continue;
             }
 
+            // Inbound prediction
+            ac.isInbound = false;
+            ac.minutesToClosest = -1.0;
+            if (ac.track >= 0 && ac.groundSpeed > 0) {
+              double toBase = fmod(ac.bearing + 180.0, 360.0);
+              double angleDiff = fabs(ac.track - toBase);
+              if (angleDiff > 180.0) angleDiff = 360.0 - angleDiff;
+              double crossTrack = ac.distanceKm * sin(deg2rad(angleDiff));
+              double alongTrack = ac.distanceKm * cos(deg2rad(angleDiff));
+              if (angleDiff < 90.0 && fabs(crossTrack) < inboundAlertDistanceKm) {
+                ac.isInbound = true;
+                double speedKmMin = ac.groundSpeed * 1.852 / 60.0;
+                if (speedKmMin > 0) {
+                  ac.minutesToClosest = alongTrack / speedKmMin;
+                }
+                bool already = std::find(alertedFlights.begin(), alertedFlights.end(), String(ac.flight)) != alertedFlights.end();
+                if (!already) {
+                  alertedFlights.push_back(String(ac.flight));
+                  playBeep(1800, 100);
+                }
+              } else {
+                auto it = std::find(alertedFlights.begin(), alertedFlights.end(), String(ac.flight));
+                if (it != alertedFlights.end()) alertedFlights.erase(it);
+              }
+            }
+
             ac.isValid = true;
             planesInRange.push_back(ac);
+            if (ac.isInbound && ac.minutesToClosest >= 0) {
+              if (!bestInbound.isInbound || ac.minutesToClosest < bestInbound.minutesToClosest) {
+                bestInbound = ac;
+              }
+            }
           }
         }
       }
 
       xSemaphoreTake(dataMutex, portMAX_DELAY);
       trackedAircraft = planesInRange;
-      // REMOVED: No longer need to update closestAircraft
+      if (bestInbound.isInbound) {
+        closestInboundAircraft = bestInbound;
+      } else {
+        closestInboundAircraft.isInbound = false;
+        closestInboundAircraft.isValid = false;
+      }
       xSemaphoreGive(dataMutex);
     } else {
       dataConnectionOk = false;

@@ -30,10 +30,11 @@ Connect the following components to your ESP32:
 ## Operation
 - The display shows a radar sweep of aircraft within range. Each time the sweep crosses a target a short beep is produced.
 - Rotate the range encoder to adjust radar range.
-- Press the range encoder to switch the volume encoder between controlling beep volume and sweep speed.
+- Press the range encoder to cycle the volume encoder between controlling beep volume, sweep speed and alert distance.
 - Rotate the volume encoder to adjust the selected parameter.
 - Long-press the volume encoder to power off.
 - Settings persist in EEPROM and a small antenna icon indicates a good data connection.
+- Aircraft predicted to pass within the alert radius flash on the radar and trigger a single alert tone. The display shows minutes until the closest inbound aircraft reaches minimum distance.
 
 ## Building in a Codex/Codespace Environment
 
