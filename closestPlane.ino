@@ -485,6 +485,9 @@ void drawRadarScreen() {
     }
     display.print("Rng: ");
     display.print(radarRangeKm, 0);
+    display.println("km");
+    display.print("Prox: ");
+    display.print(inboundAlertDistanceKm, 0);
     display.print("km");
   } else {
     display.setCursor(0, 0);
@@ -492,6 +495,9 @@ void drawRadarScreen() {
     display.setCursor(0, 16);
     display.print("Range:");
     display.print(radarRangeKm, 0);
+    display.println("km");
+    display.print("Prox: ");
+    display.print(inboundAlertDistanceKm, 0);
     display.print("km");
   }
 
