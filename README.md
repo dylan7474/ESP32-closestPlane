@@ -1,6 +1,6 @@
 # ClosestPlane ESP32
 
-An Arduino-compatible sketch for ESP32 boards that connects to a dump1090 server and renders a sweeping radar view on a 128×64 SH1106 OLED. Aircraft within the selected range appear as blips and a short tone plays as the sweep crosses each target. Volume, radar range and sweep speed are controlled with two rotary encoders and saved to EEPROM.
+An Arduino-compatible sketch for ESP32 boards that connects to a dump1090 server and renders a sweeping radar view on a 128×64 SH1106 OLED. Aircraft within the selected range appear as blips and a short tone plays as the sweep crosses each target. Volume, radar range, sweep speed, alert distance and radar orientation are controlled with two rotary encoders and saved to EEPROM.
 
 ## Required Libraries
 
@@ -30,8 +30,9 @@ Connect the following components to your ESP32:
 ## Operation
 - The display shows a radar sweep of aircraft within range. Each time the sweep crosses a target a short beep is produced.
 - Rotate the range encoder to adjust radar range.
-- Press the range encoder to cycle the volume encoder between controlling beep volume, sweep speed and alert distance.
+- Press the range encoder to cycle the volume encoder between controlling beep volume, sweep speed, alert distance and radar orientation.
 - Rotate the volume encoder to adjust the selected parameter.
+- When radar orientation is selected, the display rotates in 90° steps to align with any cardinal direction.
 - Long-press the volume encoder to power off.
 - Settings persist in EEPROM and a small antenna icon indicates a good data connection.
 - Aircraft predicted to pass within the alert radius flash on the radar and trigger a single alert tone. The display shows minutes until the closest inbound aircraft reaches minimum distance.
