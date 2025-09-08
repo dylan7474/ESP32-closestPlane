@@ -432,9 +432,6 @@ void drawRadarScreen() {
     display.print("Rng: ");
     display.print(radarRangeKm, 0);
     display.println("km");
-    display.print("Prox: ");
-    display.print(inboundAlertDistanceKm, 0);
-    display.print("km");
   } else {
     display.setCursor(0, 8);
     display.println("Scanning...");
@@ -442,9 +439,6 @@ void drawRadarScreen() {
     display.print("Range:");
     display.print(radarRangeKm, 0);
     display.println("km");
-    display.print("Prox: ");
-    display.print(inboundAlertDistanceKm, 0);
-    display.print("km");
   }
 
   if (currentClosestInbound.isInbound && currentClosestInbound.minutesToClosest >= 0) {
