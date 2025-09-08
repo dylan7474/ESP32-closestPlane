@@ -49,7 +49,7 @@ volatile byte ChannelChange = 0, ChannelPush = 0;
 volatile bool dataConnectionOk = false;
 
 // --- Control State Machine ---
-enum ControlMode { VOLUME, SPEED, ALERT };
+enum ControlMode { VOLUME, SPEED, ALERT, RADAR };
 ControlMode currentMode = VOLUME;
 
 // --- Control Variables ---
@@ -228,6 +228,7 @@ void loop() {
   if (localChannelPush == 1) {
     if (currentMode == VOLUME) currentMode = SPEED;
     else if (currentMode == SPEED) currentMode = ALERT;
+    else if (currentMode == ALERT) currentMode = RADAR;
     else currentMode = VOLUME;
   }
 
@@ -239,7 +240,7 @@ void loop() {
       sweepSpeedIndex += (localVolumeChange == 1) ? 1 : -1;
       sweepSpeedIndex = constrain(sweepSpeedIndex, 0, speedStepsCount - 1);
       sweepSpeed = sweepSpeedSteps[sweepSpeedIndex];
-    } else {
+    } else if (currentMode == ALERT) {
       inboundAlertDistanceKm += (localVolumeChange == 1) ? 1 : -1;
       inboundAlertDistanceKm = constrain(inboundAlertDistanceKm, 1.0, 50.0);
     }
@@ -358,7 +359,7 @@ void loadSettings() {
     rangeStepIndex = constrain(rangeStepIndex, 0, rangeStepsCount - 1);
     sweepSpeedIndex = constrain(sweepSpeedIndex, 0, speedStepsCount - 1);
     inboundAlertDistanceKm = constrain(inboundAlertDistanceKm, 1.0f, 50.0f);
-    currentMode = (ControlMode)constrain((int)currentMode, 0, ALERT);
+    currentMode = (ControlMode)constrain((int)currentMode, 0, RADAR);
   } else {
     Serial.println("First run or invalid EEPROM data. Setting defaults.");
     beepVolume = 10;
@@ -463,7 +464,9 @@ void drawRadarScreen() {
 
   display.drawCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS, SH110X_WHITE);
   display.setCursor(RADAR_CENTER_X - 3, RADAR_CENTER_Y - RADAR_RADIUS - 9);
+  if (currentMode == RADAR) display.setTextColor(SH110X_BLACK, SH110X_WHITE);
   display.print("N");
+  if (currentMode == RADAR) display.setTextColor(SH110X_WHITE);
 
   drawDottedCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS * 2 / 3, SH110X_WHITE);
   drawDottedCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS * 1 / 3, SH110X_WHITE);
