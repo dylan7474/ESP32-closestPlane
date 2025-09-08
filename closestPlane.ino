@@ -35,6 +35,7 @@
 #define EEPROM_ADDR_RANGE_INDEX 8
 #define EEPROM_ADDR_SPEED_INDEX 12
 #define EEPROM_ADDR_ALERT_DIST 16
+#define EEPROM_ADDR_MODE 20
 #define EEPROM_MAGIC_NUMBER 0xAD
 
 // --- Display & Rotary Objects ---
@@ -338,6 +339,7 @@ void saveSettings() {
   EEPROM.put(EEPROM_ADDR_RANGE_INDEX, rangeStepIndex);
   EEPROM.put(EEPROM_ADDR_SPEED_INDEX, sweepSpeedIndex);
   EEPROM.put(EEPROM_ADDR_ALERT_DIST, inboundAlertDistanceKm);
+  EEPROM.put(EEPROM_ADDR_MODE, currentMode);
   EEPROM.write(EEPROM_ADDR_MAGIC, EEPROM_MAGIC_NUMBER);
   EEPROM.commit();
   Serial.println("Settings saved to EEPROM.");
@@ -351,16 +353,19 @@ void loadSettings() {
     EEPROM.get(EEPROM_ADDR_RANGE_INDEX, rangeStepIndex);
     EEPROM.get(EEPROM_ADDR_SPEED_INDEX, sweepSpeedIndex);
     EEPROM.get(EEPROM_ADDR_ALERT_DIST, inboundAlertDistanceKm);
+    EEPROM.get(EEPROM_ADDR_MODE, currentMode);
     beepVolume = constrain(beepVolume, 0, 20);
     rangeStepIndex = constrain(rangeStepIndex, 0, rangeStepsCount - 1);
     sweepSpeedIndex = constrain(sweepSpeedIndex, 0, speedStepsCount - 1);
     inboundAlertDistanceKm = constrain(inboundAlertDistanceKm, 1.0f, 50.0f);
+    currentMode = (ControlMode)constrain((int)currentMode, 0, ALERT);
   } else {
     Serial.println("First run or invalid EEPROM data. Setting defaults.");
     beepVolume = 10;
     rangeStepIndex = 3;
     sweepSpeedIndex = 1;
     inboundAlertDistanceKm = INBOUND_ALERT_DISTANCE_KM;
+    currentMode = VOLUME;
     saveSettings();
   }
   radarRangeKm = rangeSteps[rangeStepIndex];
