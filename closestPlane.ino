@@ -36,6 +36,7 @@
 #define EEPROM_ADDR_SPEED_INDEX 12
 #define EEPROM_ADDR_ALERT_DIST 16
 #define EEPROM_ADDR_MODE 20
+#define EEPROM_ADDR_ORIENT_INDEX 24
 #define EEPROM_MAGIC_NUMBER 0xAD
 
 // --- Display & Rotary Objects ---
@@ -49,7 +50,7 @@ volatile byte ChannelChange = 0, ChannelPush = 0;
 volatile bool dataConnectionOk = false;
 
 // --- Control State Machine ---
-enum ControlMode { VOLUME, SPEED, ALERT };
+enum ControlMode { VOLUME, SPEED, ALERT, ORIENT };
 ControlMode currentMode = VOLUME;
 
 // --- Control Variables ---
@@ -64,6 +65,12 @@ float sweepSpeedSteps[] = {90.0, 180.0, 270.0, 360.0};
 const int speedStepsCount = sizeof(sweepSpeedSteps) / sizeof(sweepSpeedSteps[0]);
 int sweepSpeedIndex;
 float sweepSpeed;
+
+int orientationSteps[] = {0, 90, 180, 270};
+const int orientationStepsCount = sizeof(orientationSteps) / sizeof(orientationSteps[0]);
+int orientationIndex;
+int radarOrientation;
+const char* orientationLabels[] = {"N", "E", "S", "W"};
 
 #define INBOUND_ALERT_DISTANCE_KM 5.0
 float inboundAlertDistanceKm;
@@ -228,6 +235,7 @@ void loop() {
   if (localChannelPush == 1) {
     if (currentMode == VOLUME) currentMode = SPEED;
     else if (currentMode == SPEED) currentMode = ALERT;
+    else if (currentMode == ALERT) currentMode = ORIENT;
     else currentMode = VOLUME;
   }
 
@@ -239,9 +247,17 @@ void loop() {
       sweepSpeedIndex += (localVolumeChange == 1) ? 1 : -1;
       sweepSpeedIndex = constrain(sweepSpeedIndex, 0, speedStepsCount - 1);
       sweepSpeed = sweepSpeedSteps[sweepSpeedIndex];
-    } else {
+    } else if (currentMode == ALERT) {
       inboundAlertDistanceKm += (localVolumeChange == 1) ? 1 : -1;
       inboundAlertDistanceKm = constrain(inboundAlertDistanceKm, 1.0, 50.0);
+    } else {
+      orientationIndex += (localVolumeChange == 1) ? 1 : -1;
+      orientationIndex = (orientationIndex + orientationStepsCount) % orientationStepsCount;
+      radarOrientation = orientationSteps[orientationIndex];
+      xSemaphoreTake(dataMutex, portMAX_DELAY);
+      activeBlips.clear();
+      paintedThisTurn.assign(trackedAircraft.size(), false);
+      xSemaphoreGive(dataMutex);
     }
   }
   
@@ -291,7 +307,8 @@ void loop() {
         bearingCrossed = true;
       }
       if (bearingCrossed) {
-        double angleRad = targetBearing * PI / 180.0;
+        double displayBearing = fmod(targetBearing - radarOrientation + 360.0, 360.0);
+        double angleRad = displayBearing * PI / 180.0;
         double realDistance = trackedAircraft[i].distanceKm;
         float screenRadius = map(realDistance, 0, radarRangeKm, 0, RADAR_RADIUS);
         int16_t newBlipX = RADAR_CENTER_X + screenRadius * sin(angleRad);
@@ -340,6 +357,7 @@ void saveSettings() {
   EEPROM.put(EEPROM_ADDR_SPEED_INDEX, sweepSpeedIndex);
   EEPROM.put(EEPROM_ADDR_ALERT_DIST, inboundAlertDistanceKm);
   EEPROM.put(EEPROM_ADDR_MODE, currentMode);
+  EEPROM.put(EEPROM_ADDR_ORIENT_INDEX, orientationIndex);
   EEPROM.write(EEPROM_ADDR_MAGIC, EEPROM_MAGIC_NUMBER);
   EEPROM.commit();
   Serial.println("Settings saved to EEPROM.");
@@ -354,11 +372,13 @@ void loadSettings() {
     EEPROM.get(EEPROM_ADDR_SPEED_INDEX, sweepSpeedIndex);
     EEPROM.get(EEPROM_ADDR_ALERT_DIST, inboundAlertDistanceKm);
     EEPROM.get(EEPROM_ADDR_MODE, currentMode);
+    EEPROM.get(EEPROM_ADDR_ORIENT_INDEX, orientationIndex);
     beepVolume = constrain(beepVolume, 0, 20);
     rangeStepIndex = constrain(rangeStepIndex, 0, rangeStepsCount - 1);
     sweepSpeedIndex = constrain(sweepSpeedIndex, 0, speedStepsCount - 1);
     inboundAlertDistanceKm = constrain(inboundAlertDistanceKm, 1.0f, 50.0f);
-    currentMode = (ControlMode)constrain((int)currentMode, 0, ALERT);
+    currentMode = (ControlMode)constrain((int)currentMode, 0, ORIENT);
+    orientationIndex = constrain(orientationIndex, 0, orientationStepsCount - 1);
   } else {
     Serial.println("First run or invalid EEPROM data. Setting defaults.");
     beepVolume = 10;
@@ -366,14 +386,18 @@ void loadSettings() {
     sweepSpeedIndex = 1;
     inboundAlertDistanceKm = INBOUND_ALERT_DISTANCE_KM;
     currentMode = VOLUME;
+    orientationIndex = 0;
+    radarOrientation = orientationSteps[orientationIndex];
     saveSettings();
   }
   radarRangeKm = rangeSteps[rangeStepIndex];
   sweepSpeed = sweepSpeedSteps[sweepSpeedIndex];
+  radarOrientation = orientationSteps[orientationIndex];
   Serial.printf("Loaded Volume: %d\n", beepVolume);
   Serial.printf("Loaded Range: %.0f km\n", radarRangeKm);
   Serial.printf("Loaded Speed: %.1f deg/s\n", sweepSpeed);
   Serial.printf("Loaded Alert Dist: %.1f km\n", inboundAlertDistanceKm);
+  Serial.printf("Loaded Orientation: %d deg\n", radarOrientation);
 }
 
 void drawRadarScreen() {
@@ -400,7 +424,12 @@ void drawRadarScreen() {
   display.setTextColor(SH110X_WHITE);
   display.print(":");
   display.print(inboundAlertDistanceKm, 0);
-  display.print("k");
+  display.print("k ");
+  if (currentMode == ORIENT) display.setTextColor(SH110X_BLACK, SH110X_WHITE);
+  display.print("O");
+  display.setTextColor(SH110X_WHITE);
+  display.print(":");
+  display.print(radarOrientation);
 
   Aircraft currentAircraftToDisplay; // CHANGED
   Aircraft currentClosestInbound;
@@ -463,7 +492,7 @@ void drawRadarScreen() {
 
   display.drawCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS, SH110X_WHITE);
   display.setCursor(RADAR_CENTER_X - 3, RADAR_CENTER_Y - RADAR_RADIUS - 9);
-  display.print("N");
+  display.print(orientationLabels[orientationIndex]);
 
   drawDottedCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS * 2 / 3, SH110X_WHITE);
   drawDottedCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS * 1 / 3, SH110X_WHITE);
@@ -480,7 +509,7 @@ void drawRadarScreen() {
     }
   }
 
-  double sweepRad = sweepAngle * PI / 180.0;
+  double sweepRad = (sweepAngle - radarOrientation) * PI / 180.0;
   int16_t sweepX = RADAR_CENTER_X + (RADAR_RADIUS - 1) * sin(sweepRad);
   int16_t sweepY = RADAR_CENTER_Y - (RADAR_RADIUS - 1) * cos(sweepRad);
   display.drawLine(RADAR_CENTER_X, RADAR_CENTER_Y, sweepX, sweepY, SH110X_WHITE);
