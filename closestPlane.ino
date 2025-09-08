@@ -36,6 +36,7 @@
 #define EEPROM_ADDR_SPEED_INDEX 12
 #define EEPROM_ADDR_ALERT_DIST 16
 #define EEPROM_ADDR_MODE 20
+#define EEPROM_ADDR_COMPASS 24
 #define EEPROM_MAGIC_NUMBER 0xAD
 
 // --- Display & Rotary Objects ---
@@ -67,6 +68,11 @@ float sweepSpeed;
 
 #define INBOUND_ALERT_DISTANCE_KM 5.0
 float inboundAlertDistanceKm;
+
+float compassPoints[] = {0.0, 90.0, 180.0, 270.0};
+const int compassPointsCount = sizeof(compassPoints) / sizeof(compassPoints[0]);
+int compassIndex;
+float radarOrientation;
 
 // --- Data Structs ---
 struct Aircraft {
@@ -243,6 +249,14 @@ void loop() {
     } else if (currentMode == ALERT) {
       inboundAlertDistanceKm += (localVolumeChange == 1) ? 1 : -1;
       inboundAlertDistanceKm = constrain(inboundAlertDistanceKm, 1.0, 50.0);
+    } else if (currentMode == RADAR) {
+      compassIndex += (localVolumeChange == 1) ? 1 : -1;
+      if (compassIndex < 0) compassIndex = compassPointsCount - 1;
+      if (compassIndex >= compassPointsCount) compassIndex = 0;
+      radarOrientation = compassPoints[compassIndex];
+      activeBlips.clear();
+      paintedThisTurn.assign(trackedAircraft.size(), false);
+      lastSweepAngle = sweepAngle;
     }
   }
   
@@ -286,7 +300,8 @@ void loop() {
   xSemaphoreTake(dataMutex, portMAX_DELAY);
   for (int i = 0; i < trackedAircraft.size(); i++) {
     if (i < paintedThisTurn.size() && !paintedThisTurn[i]) {
-      double targetBearing = trackedAircraft[i].bearing;
+      double targetBearing = trackedAircraft[i].bearing - radarOrientation;
+      if (targetBearing < 0) targetBearing += 360.0;
       bool bearingCrossed = (lastSweepAngle < targetBearing && sweepAngle >= targetBearing);
       if (lastSweepAngle > sweepAngle && (targetBearing > lastSweepAngle || targetBearing <= sweepAngle)) {
         bearingCrossed = true;
@@ -341,6 +356,7 @@ void saveSettings() {
   EEPROM.put(EEPROM_ADDR_SPEED_INDEX, sweepSpeedIndex);
   EEPROM.put(EEPROM_ADDR_ALERT_DIST, inboundAlertDistanceKm);
   EEPROM.put(EEPROM_ADDR_MODE, currentMode);
+  EEPROM.put(EEPROM_ADDR_COMPASS, compassIndex);
   EEPROM.write(EEPROM_ADDR_MAGIC, EEPROM_MAGIC_NUMBER);
   EEPROM.commit();
   Serial.println("Settings saved to EEPROM.");
@@ -355,11 +371,13 @@ void loadSettings() {
     EEPROM.get(EEPROM_ADDR_SPEED_INDEX, sweepSpeedIndex);
     EEPROM.get(EEPROM_ADDR_ALERT_DIST, inboundAlertDistanceKm);
     EEPROM.get(EEPROM_ADDR_MODE, currentMode);
+    EEPROM.get(EEPROM_ADDR_COMPASS, compassIndex);
     beepVolume = constrain(beepVolume, 0, 20);
     rangeStepIndex = constrain(rangeStepIndex, 0, rangeStepsCount - 1);
     sweepSpeedIndex = constrain(sweepSpeedIndex, 0, speedStepsCount - 1);
     inboundAlertDistanceKm = constrain(inboundAlertDistanceKm, 1.0f, 50.0f);
     currentMode = (ControlMode)constrain((int)currentMode, 0, RADAR);
+    compassIndex = constrain(compassIndex, 0, compassPointsCount - 1);
   } else {
     Serial.println("First run or invalid EEPROM data. Setting defaults.");
     beepVolume = 10;
@@ -367,10 +385,12 @@ void loadSettings() {
     sweepSpeedIndex = 1;
     inboundAlertDistanceKm = INBOUND_ALERT_DISTANCE_KM;
     currentMode = VOLUME;
+    compassIndex = 0;
     saveSettings();
   }
   radarRangeKm = rangeSteps[rangeStepIndex];
   sweepSpeed = sweepSpeedSteps[sweepSpeedIndex];
+  radarOrientation = compassPoints[compassIndex];
   Serial.printf("Loaded Volume: %d\n", beepVolume);
   Serial.printf("Loaded Range: %.0f km\n", radarRangeKm);
   Serial.printf("Loaded Speed: %.1f deg/s\n", sweepSpeed);
@@ -465,7 +485,8 @@ void drawRadarScreen() {
   display.drawCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS, SH110X_WHITE);
   display.setCursor(RADAR_CENTER_X - 3, RADAR_CENTER_Y - RADAR_RADIUS - 9);
   if (currentMode == RADAR) display.setTextColor(SH110X_BLACK, SH110X_WHITE);
-  display.print("N");
+  const char compassLetters[] = {'N','E','S','W'};
+  display.print(compassLetters[compassIndex]);
   if (currentMode == RADAR) display.setTextColor(SH110X_WHITE);
 
   drawDottedCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS * 2 / 3, SH110X_WHITE);
