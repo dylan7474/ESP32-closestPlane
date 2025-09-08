@@ -32,7 +32,7 @@ Connect the following components to your ESP32:
 - Rotate the range encoder to adjust radar range.
 - Press the range encoder to cycle the volume encoder between controlling beep volume, sweep speed, alert distance and radar orientation.
 - Rotate the volume encoder to adjust the selected parameter.
-- When radar orientation is selected, the display rotates in 90° steps to align with any cardinal direction.
+- When radar orientation is selected, the display rotates in 90° steps to align with any cardinal direction, and the current orientation appears at the top of the radar as N, E, S or W.
 - Long-press the volume encoder to power off.
 - Settings persist in EEPROM and a small antenna icon indicates a good data connection.
 - Aircraft predicted to pass within the alert radius flash on the radar and trigger a single alert tone. The display shows minutes until the closest inbound aircraft reaches minimum distance.

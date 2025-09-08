@@ -429,7 +429,7 @@ void drawRadarScreen() {
   display.print("O");
   display.setTextColor(SH110X_WHITE);
   display.print(":");
-  display.print(radarOrientation);
+  display.print(orientationLabels[orientationIndex]);
 
   Aircraft currentAircraftToDisplay; // CHANGED
   Aircraft currentClosestInbound;
