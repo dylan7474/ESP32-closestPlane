@@ -513,15 +513,22 @@ void drawRadarScreen() {
 }
 
 void fetchAircraft() {
+  WiFiClient client;
+  client.setTimeout(4000);
   HTTPClient http;
+  http.setReuse(false);
   char url[160];
   snprintf(url, sizeof(url), "http://%s:%d/dump1090-fa/data/aircraft.json", DUMP1090_SERVER, DUMP1090_PORT);
 
-  if (!http.begin(url)) {
+  if (!http.begin(client, url)) {
     dataConnectionOk = false;
+    if (WiFi.status() != WL_CONNECTED) {
+      WiFi.reconnect();
+    }
     return;
   }
 
+  http.setTimeout(4000);
   int httpCode = http.GET();
   if (httpCode == HTTP_CODE_OK) {
     DynamicJsonDocument filter(512);
@@ -646,6 +653,9 @@ void fetchAircraft() {
     trackedAircraft.clear();
     lastPingedAircraft.isValid = false; // Invalidate display on connection loss
     xSemaphoreGive(dataMutex);
+    if (WiFi.status() != WL_CONNECTED) {
+      WiFi.reconnect();
+    }
   }
   http.end();
 }
