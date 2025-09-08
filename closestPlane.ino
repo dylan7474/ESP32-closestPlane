@@ -70,7 +70,7 @@ int orientationSteps[] = {0, 90, 180, 270};
 const int orientationStepsCount = sizeof(orientationSteps) / sizeof(orientationSteps[0]);
 int orientationIndex;
 int radarOrientation;
-const char* orientationLabels[] = {"N", "E", "S", "W"};
+const char orientationLabels[] = {'N', 'E', 'S', 'W'};
 
 #define INBOUND_ALERT_DISTANCE_KM 5.0
 float inboundAlertDistanceKm;
@@ -490,9 +490,9 @@ void drawRadarScreen() {
   }
 
   display.drawCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS, SH110X_WHITE);
-  display.fillRect(RADAR_CENTER_X - 3, RADAR_CENTER_Y - RADAR_RADIUS - 9, 6, 8, SH110X_BLACK);
+  display.fillRect(RADAR_CENTER_X - 5, RADAR_CENTER_Y - RADAR_RADIUS - 9, 10, 8, SH110X_BLACK);
   display.setCursor(RADAR_CENTER_X - 3, RADAR_CENTER_Y - RADAR_RADIUS - 9);
-  display.print(orientationLabels[orientationIndex]);
+  display.write(orientationLabels[orientationIndex]);
 
   drawDottedCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS * 2 / 3, SH110X_WHITE);
   drawDottedCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS * 1 / 3, SH110X_WHITE);
