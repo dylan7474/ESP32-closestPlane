@@ -19,7 +19,6 @@
 #define SCREEN_HEIGHT 64
 #define REFRESH_INTERVAL_MS 5000
 #define WIFI_CONNECT_TIMEOUT_MS 10000
-#define DISPLAY_TIMEOUT_MS 1000 
 
 // --- Radar Constants ---
 #define EARTH_RADIUS_KM 6371.0
@@ -54,29 +53,19 @@ ControlMode currentMode = VOLUME;
 
 // --- Control Variables ---
 int beepVolume;
-bool displayingVolume = false;
-unsigned long volumeDisplayTimeout = 0;
 
 float rangeSteps[] = {5, 10, 25, 50, 100, 150, 200, 300};
 const int rangeStepsCount = sizeof(rangeSteps) / sizeof(rangeSteps[0]);
 int rangeStepIndex;
 float radarRangeKm;
-bool displayingRange = false;
-unsigned long rangeDisplayTimeout = 0;
 
 float sweepSpeedSteps[] = {90.0, 180.0, 270.0, 360.0};
 const int speedStepsCount = sizeof(sweepSpeedSteps) / sizeof(sweepSpeedSteps[0]);
 int sweepSpeedIndex;
 float sweepSpeed;
-bool displayingSpeed = false;
-unsigned long speedDisplayTimeout = 0;
-bool displayingMode = false;
-unsigned long modeDisplayTimeout = 0;
 
 #define INBOUND_ALERT_DISTANCE_KM 5.0
 float inboundAlertDistanceKm;
-bool displayingAlertDistance = false;
-unsigned long alertDisplayTimeout = 0;
 
 // --- Data Structs ---
 struct Aircraft {
@@ -239,27 +228,19 @@ void loop() {
     if (currentMode == VOLUME) currentMode = SPEED;
     else if (currentMode == SPEED) currentMode = ALERT;
     else currentMode = VOLUME;
-    displayingMode = true;
-    modeDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS;
   }
 
   if (localVolumeChange != 0) {
     if (currentMode == VOLUME) {
       beepVolume += (localVolumeChange == 1) ? 1 : -1;
       beepVolume = constrain(beepVolume, 0, 20);
-      displayingVolume = true;
-      volumeDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS;
     } else if (currentMode == SPEED) {
       sweepSpeedIndex += (localVolumeChange == 1) ? 1 : -1;
       sweepSpeedIndex = constrain(sweepSpeedIndex, 0, speedStepsCount - 1);
       sweepSpeed = sweepSpeedSteps[sweepSpeedIndex];
-      displayingSpeed = true;
-      speedDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS;
     } else {
       inboundAlertDistanceKm += (localVolumeChange == 1) ? 1 : -1;
       inboundAlertDistanceKm = constrain(inboundAlertDistanceKm, 1.0, 50.0);
-      displayingAlertDistance = true;
-      alertDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS;
     }
   }
   
@@ -269,8 +250,6 @@ void loop() {
     rangeStepIndex += (localChannelChange == 1) ? 1 : -1;
     rangeStepIndex = constrain(rangeStepIndex, 0, rangeStepsCount - 1);
     radarRangeKm = rangeSteps[rangeStepIndex];
-    displayingRange = true;
-    rangeDisplayTimeout = currentTime + DISPLAY_TIMEOUT_MS;
     
     xSemaphoreTake(dataMutex, portMAX_DELAY);
     activeBlips.clear(); 
@@ -289,11 +268,7 @@ void loop() {
     xSemaphoreGive(dataMutex);
   }
   
-  if (displayingVolume && currentTime > volumeDisplayTimeout) { displayingVolume = false; }
-  if (displayingRange && currentTime > rangeDisplayTimeout) { displayingRange = false; }
-  if (displayingSpeed && currentTime > speedDisplayTimeout) { displayingSpeed = false; }
-  if (displayingMode && currentTime > modeDisplayTimeout) { displayingMode = false; }
-  if (displayingAlertDistance && currentTime > alertDisplayTimeout) { displayingAlertDistance = false; }
+
 
   if (deltaTime > 0) {
     lastSweepAngle = sweepAngle;
@@ -399,57 +374,28 @@ void loadSettings() {
 void drawRadarScreen() {
   display.clearDisplay();
   display.setTextSize(1);
+  display.setTextColor(SH110X_WHITE);
 
-  if (displayingMode) {
-    display.setCursor(20, 16);
-    display.print("Control Mode");
-    display.setTextSize(2);
-    display.setCursor(20, 32);
-    if (currentMode == VOLUME) display.print("Volume");
-    else if (currentMode == SPEED) display.print("Speed");
-    else display.print("Alert");
-    display.display();
-    return;
-  }
-  if (displayingSpeed) {
-    display.setCursor(20, 16);
-    display.print("Sweep Speed");
-    display.setTextSize(2);
-    display.setCursor(20, 32);
-    display.print(sweepSpeed, 0);
-    display.print(" d/s");
-    display.display();
-    return;
-  }
-  if (displayingRange) {
-    display.setCursor(20, 16);
-    display.print("Radar Range");
-    display.setTextSize(2);
-    display.setCursor(20, 32);
-    display.print(radarRangeKm, 0);
-    display.print(" km");
-    display.display();
-    return;
-  }
-  if (displayingVolume) {
-    display.setCursor(20, 16);
-    display.print("Beep Volume");
-    display.drawRect(14, 32, 100, 16, SH110X_WHITE);
-    int barWidth = map(beepVolume, 0, 20, 0, 98);
-    display.fillRect(15, 33, barWidth, 14, SH110X_WHITE);
-    display.display();
-    return;
-  }
-  if (displayingAlertDistance) {
-    display.setCursor(20, 16);
-    display.print("Alert Dist");
-    display.setTextSize(2);
-    display.setCursor(20, 32);
-    display.print(inboundAlertDistanceKm, 0);
-    display.print(" km");
-    display.display();
-    return;
-  }
+  // Settings summary row
+  display.setCursor(0, 0);
+  if (currentMode == VOLUME) display.setTextColor(SH110X_BLACK, SH110X_WHITE);
+  display.print("V");
+  display.setTextColor(SH110X_WHITE);
+  display.print(":");
+  display.print(beepVolume);
+  display.print(" ");
+  if (currentMode == SPEED) display.setTextColor(SH110X_BLACK, SH110X_WHITE);
+  display.print("S");
+  display.setTextColor(SH110X_WHITE);
+  display.print(":");
+  display.print(sweepSpeed, 0);
+  display.print(" ");
+  if (currentMode == ALERT) display.setTextColor(SH110X_BLACK, SH110X_WHITE);
+  display.print("P");
+  display.setTextColor(SH110X_WHITE);
+  display.print(":");
+  display.print(inboundAlertDistanceKm, 0);
+  display.print("k");
 
   Aircraft currentAircraftToDisplay; // CHANGED
   Aircraft currentClosestInbound;
@@ -463,7 +409,7 @@ void drawRadarScreen() {
 
   // CHANGED: All display logic now uses currentAircraftToDisplay
   if (currentAircraftToDisplay.isValid) {
-    display.setCursor(0, 0);
+    display.setCursor(0, 8);
     display.print("Flt: ");
     display.println(strlen(currentAircraftToDisplay.flight) > 0 ? currentAircraftToDisplay.flight : "------");
     display.print("Dst: ");
@@ -490,9 +436,9 @@ void drawRadarScreen() {
     display.print(inboundAlertDistanceKm, 0);
     display.print("km");
   } else {
-    display.setCursor(0, 0);
+    display.setCursor(0, 8);
     display.println("Scanning...");
-    display.setCursor(0, 16);
+    display.setCursor(0, 24);
     display.print("Range:");
     display.print(radarRangeKm, 0);
     display.println("km");
