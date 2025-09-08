@@ -428,8 +428,7 @@ void drawRadarScreen() {
   if (currentMode == ORIENT) display.setTextColor(SH110X_BLACK, SH110X_WHITE);
   display.print("O");
   display.setTextColor(SH110X_WHITE);
-  display.print(":");
-  display.print(orientationLabels[orientationIndex]);
+  display.print(" ");
 
   Aircraft currentAircraftToDisplay; // CHANGED
   Aircraft currentClosestInbound;
@@ -491,6 +490,7 @@ void drawRadarScreen() {
   }
 
   display.drawCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS, SH110X_WHITE);
+  display.fillRect(RADAR_CENTER_X - 3, RADAR_CENTER_Y - RADAR_RADIUS - 9, 6, 8, SH110X_BLACK);
   display.setCursor(RADAR_CENTER_X - 3, RADAR_CENTER_Y - RADAR_RADIUS - 9);
   display.print(orientationLabels[orientationIndex]);
 
