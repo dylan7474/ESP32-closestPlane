@@ -19,6 +19,7 @@
 #define SCREEN_HEIGHT 64
 #define REFRESH_INTERVAL_MS 5000
 #define WIFI_CONNECT_TIMEOUT_MS 10000
+#define FETCH_SLOW_THRESHOLD_MS 4000
 
 // --- Radar Constants ---
 #define EARTH_RADIUS_KM 6371.0
@@ -48,6 +49,9 @@ SimpleRotary ChannelSelector(25, 32, 2);
 volatile byte VolumeChange = 0, VolumePush = 0;
 volatile byte ChannelChange = 0, ChannelPush = 0;
 volatile bool dataConnectionOk = false;
+volatile unsigned long lastFetchDurationMs = 0;
+volatile int consecutiveFailures = 0;
+volatile int lastRSSI = -100;
 
 // --- Control State Machine ---
 enum ControlMode { VOLUME, SPEED, ALERT, RADAR };
@@ -473,13 +477,32 @@ void drawRadarScreen() {
     display.print(currentClosestInbound.minutesToClosest, 1);
     display.print("m");
   }
+  display.setCursor(SCREEN_WIDTH - 40, 56);
+  display.print(lastFetchDurationMs);
+  display.print("ms");
 
-  if (dataConnectionOk) {
-    int16_t baseX = SCREEN_WIDTH - 6;
-    int16_t baseY = 8;
-    display.drawLine(baseX, baseY, baseX, baseY - 4, SH110X_WHITE); 
-    display.drawLine(baseX, baseY - 4, baseX - 3, baseY - 7, SH110X_WHITE);
-    display.drawLine(baseX, baseY - 4, baseX + 3, baseY - 7, SH110X_WHITE);
+  int16_t wifiBaseX = SCREEN_WIDTH - 10;
+  int16_t wifiBaseY = 8;
+  if (WiFi.status() == WL_CONNECTED) {
+    int bars = 0;
+    if (lastRSSI > -55) bars = 3;
+    else if (lastRSSI > -70) bars = 2;
+    else if (lastRSSI > -85) bars = 1;
+    for (int i = 0; i < bars; i++) {
+      int h = (i + 1) * 2;
+      display.fillRect(wifiBaseX + i * 3, wifiBaseY - h, 2, h, SH110X_WHITE);
+    }
+  } else {
+    display.drawLine(wifiBaseX, wifiBaseY - 6, wifiBaseX + 6, wifiBaseY, SH110X_WHITE);
+    display.drawLine(wifiBaseX + 6, wifiBaseY - 6, wifiBaseX, wifiBaseY, SH110X_WHITE);
+  }
+  if (lastFetchDurationMs > FETCH_SLOW_THRESHOLD_MS) {
+    display.drawLine(wifiBaseX - 4, wifiBaseY - 6, wifiBaseX - 4, wifiBaseY - 1, SH110X_WHITE);
+    display.drawPixel(wifiBaseX - 4, wifiBaseY, SH110X_WHITE);
+  }
+  if (consecutiveFailures > 0) {
+    display.setCursor(SCREEN_WIDTH - 20, 0);
+    display.print(consecutiveFailures);
   }
 
   display.drawCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS, SH110X_WHITE);
@@ -513,6 +536,7 @@ void drawRadarScreen() {
 }
 
 void fetchAircraft() {
+  unsigned long fetchStart = millis();
   WiFiClient client;
   client.setTimeout(4000);
   HTTPClient http;
@@ -522,6 +546,9 @@ void fetchAircraft() {
 
   if (!http.begin(client, url)) {
     dataConnectionOk = false;
+    consecutiveFailures++;
+    lastRSSI = WiFi.RSSI();
+    lastFetchDurationMs = millis() - fetchStart;
     if (WiFi.status() != WL_CONNECTED) {
       WiFi.reconnect();
     }
@@ -644,20 +671,27 @@ void fetchAircraft() {
         closestInboundAircraft.isValid = false;
       }
       xSemaphoreGive(dataMutex);
+      consecutiveFailures = 0;
+      lastRSSI = WiFi.RSSI();
     } else {
       dataConnectionOk = false;
+      consecutiveFailures++;
+      lastRSSI = WiFi.RSSI();
     }
   } else {
     dataConnectionOk = false;
+    consecutiveFailures++;
     xSemaphoreTake(dataMutex, portMAX_DELAY);
     trackedAircraft.clear();
     lastPingedAircraft.isValid = false; // Invalidate display on connection loss
     xSemaphoreGive(dataMutex);
+    lastRSSI = WiFi.RSSI();
     if (WiFi.status() != WL_CONNECTED) {
       WiFi.reconnect();
     }
   }
   http.end();
+  lastFetchDurationMs = millis() - fetchStart;
 }
 
 void playBeep(int freq, int duration_ms) {
