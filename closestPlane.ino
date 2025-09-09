@@ -164,7 +164,9 @@ int getBeepFrequencyForAltitude(int altitude) {
   }
 }
 
-// --- TASK FOR CORE 0: DATA FETCHING ---
+// --- TASK FOR CORE 1: DATA FETCHING ---
+// Move HTTP requests and JSON parsing off the Wi-Fi core (0)
+// to avoid starving the networking stack.
 void fetchDataTask(void *pvParameters) {
   for (;;) {
     fetchAircraft();
@@ -217,7 +219,8 @@ void setup() {
   i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
   i2s_set_pin(I2S_NUM_0, &pin_config);
 
-  xTaskCreatePinnedToCore(fetchDataTask, "FetchData", 8192, NULL, 2, NULL, 0);
+  // Run network fetch on core 1 at normal priority to free core 0 for Wi-Fi
+  xTaskCreatePinnedToCore(fetchDataTask, "FetchData", 8192, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(encoderTask, "Encoder", 2048, NULL, 3, NULL, 1);
 }
 
