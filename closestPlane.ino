@@ -472,11 +472,13 @@ void drawRadarScreen() {
   }
 
   if (currentClosestInbound.isInbound && currentClosestInbound.minutesToClosest >= 0) {
-    display.setCursor(0, 56);
+    display.setCursor(0, 48);
     display.print("ETA: ");
     display.print(currentClosestInbound.minutesToClosest, 1);
     display.print("m");
   }
+  display.setCursor(0, 56);
+  display.print(WiFi.localIP());
   display.setCursor(SCREEN_WIDTH - 40, 56);
   display.print(lastFetchDurationMs);
   display.print("ms");
