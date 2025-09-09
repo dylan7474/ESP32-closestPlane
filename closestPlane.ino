@@ -1,5 +1,6 @@
 #include <SimpleRotary.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Adafruit_GFX.h>
@@ -209,6 +210,8 @@ void setup() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("\nWiFi connected.");
     WiFi.setSleep(false);
+    WiFi.setTxPower(WIFI_POWER_19_5dBm);
+    esp_wifi_set_ps(WIFI_PS_NONE);
   } else {
     Serial.println("\nWiFi connection failed.");
     display.fillRect(0, 16, SCREEN_WIDTH, 16, SH110X_BLACK);
@@ -345,6 +348,7 @@ void loop() {
 
   drawRadarScreen();
   lastFrameTime = currentTime;
+  delay(1);
 }
 
 void Poweroff(String powermessage) {
@@ -558,6 +562,7 @@ void fetchAircraft() {
   client.setNoDelay(true);
   HTTPClient http;
   http.setReuse(false);
+  http.setConnectTimeout(4000);
   char url[160];
   snprintf(url, sizeof(url), "http://%s:%d/dump1090-fa/data/aircraft.json", DUMP1090_SERVER, DUMP1090_PORT);
 
