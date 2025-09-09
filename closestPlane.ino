@@ -19,6 +19,7 @@
 #define SCREEN_HEIGHT 64
 #define REFRESH_INTERVAL_MS 5000
 #define WIFI_CONNECT_TIMEOUT_MS 10000
+#define WIFI_RECONNECT_INTERVAL_MS 10000
 #define FETCH_SLOW_THRESHOLD_MS 4000
 
 // --- Radar Constants ---
@@ -52,6 +53,7 @@ volatile bool dataConnectionOk = false;
 volatile unsigned long lastFetchDurationMs = 0;
 volatile int consecutiveFailures = 0;
 volatile int lastRSSI = -100;
+unsigned long lastReconnectAttempt = 0;
 
 // --- Control State Machine ---
 enum ControlMode { VOLUME, SPEED, ALERT, RADAR };
@@ -118,6 +120,7 @@ void loadSettings();
 void fetchAircraft();
 void drawRadarScreen();
 void fetchDataTask(void *pvParameters);
+void tryReconnect();
 void encoderTask(void *pvParameters);
 void Poweroff(String powermessage);
 double haversine(double lat1, double lon1, double lat2, double lon2);
@@ -540,10 +543,19 @@ void drawRadarScreen() {
   display.display();
 }
 
+void tryReconnect() {
+  unsigned long now = millis();
+  if (WiFi.status() != WL_CONNECTED && now - lastReconnectAttempt > WIFI_RECONNECT_INTERVAL_MS) {
+    WiFi.reconnect();
+    lastReconnectAttempt = now;
+  }
+}
+
 void fetchAircraft() {
   unsigned long fetchStart = millis();
   WiFiClient client;
   client.setTimeout(4000);
+  client.setNoDelay(true);
   HTTPClient http;
   http.setReuse(false);
   char url[160];
@@ -554,9 +566,7 @@ void fetchAircraft() {
     consecutiveFailures++;
     lastRSSI = WiFi.RSSI();
     lastFetchDurationMs = millis() - fetchStart;
-    if (WiFi.status() != WL_CONNECTED) {
-      WiFi.reconnect();
-    }
+    tryReconnect();
     return;
   }
 
@@ -691,9 +701,7 @@ void fetchAircraft() {
     lastPingedAircraft.isValid = false; // Invalidate display on connection loss
     xSemaphoreGive(dataMutex);
     lastRSSI = WiFi.RSSI();
-    if (WiFi.status() != WL_CONNECTED) {
-      WiFi.reconnect();
-    }
+    tryReconnect();
   }
   http.end();
   lastFetchDurationMs = millis() - fetchStart;
