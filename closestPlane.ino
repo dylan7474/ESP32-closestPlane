@@ -225,8 +225,8 @@ void setup() {
   i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
   i2s_set_pin(I2S_NUM_0, &pin_config);
 
-  // Run network fetch on core 1 at normal priority to free core 0 for Wi-Fi
-  xTaskCreatePinnedToCore(fetchDataTask, "FetchData", 8192, NULL, 1, NULL, 1);
+  // Run network fetch at idle priority to minimize interference with Wi-Fi
+  xTaskCreatePinnedToCore(fetchDataTask, "FetchData", 8192, NULL, 0, NULL, 1);
   xTaskCreatePinnedToCore(encoderTask, "Encoder", 2048, NULL, 3, NULL, 1);
 }
 
@@ -714,23 +714,38 @@ void fetchAircraft() {
 
 void playBeep(int freq, int duration_ms) {
   long amplitude = map(beepVolume, 0, 20, 0, 25000);
-  const int sampleRate = 44100; int samples = sampleRate * duration_ms / 1000; size_t bytes_written;
-  for (int i = 0; i < samples; i++) {
-    int16_t sample = (int16_t)(sin(2 * PI * freq * i / sampleRate) * amplitude);
-    i2s_write(I2S_NUM_0, &sample, sizeof(sample), &bytes_written, portMAX_DELAY);
+  const int sampleRate = 44100;
+  int totalSamples = sampleRate * duration_ms / 1000;
+  const int chunkSize = 256;
+  int16_t buffer[chunkSize];
+  for (int i = 0; i < totalSamples; i += chunkSize) {
+    int n = std::min(chunkSize, totalSamples - i);
+    for (int j = 0; j < n; j++) {
+      int idx = i + j;
+      buffer[j] = (int16_t)(sin(2 * PI * freq * idx / sampleRate) * amplitude);
+    }
+    size_t bytes_written;
+    i2s_write(I2S_NUM_0, buffer, n * sizeof(int16_t), &bytes_written, portMAX_DELAY);
+    vTaskDelay(1);
   }
 }
 
 void playSiren(int startFreq, int endFreq, int duration_ms) {
   long amplitude = map(beepVolume, 0, 20, 0, 25000);
   const int sampleRate = 44100;
-  int samples = sampleRate * duration_ms / 1000;
-  size_t bytes_written;
-  for (int i = 0; i < samples; i++) {
-    float progress = (float)i / samples;
-    float freq = startFreq + (endFreq - startFreq) * progress;
-    int16_t sample = (int16_t)(sin(2 * PI * freq * i / sampleRate) * amplitude);
-    i2s_write(I2S_NUM_0, &sample, sizeof(sample), &bytes_written, portMAX_DELAY);
+  int totalSamples = sampleRate * duration_ms / 1000;
+  const int chunkSize = 256;
+  int16_t buffer[chunkSize];
+  for (int i = 0; i < totalSamples; i += chunkSize) {
+    int n = std::min(chunkSize, totalSamples - i);
+    for (int j = 0; j < n; j++) {
+      float progress = float(i + j) / totalSamples;
+      float freq = startFreq + (endFreq - startFreq) * progress;
+      buffer[j] = (int16_t)(sin(2 * PI * freq * (i + j) / sampleRate) * amplitude);
+    }
+    size_t bytes_written;
+    i2s_write(I2S_NUM_0, buffer, n * sizeof(int16_t), &bytes_written, portMAX_DELAY);
+    vTaskDelay(1);
   }
 }
 
