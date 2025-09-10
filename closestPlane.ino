@@ -34,6 +34,8 @@ float batteryVoltage = 0.0;
 int prevBatteryReading = 0;
 const int BATTERY_SMOOTHING = 200;
 int lowPowerScore = 0;
+const unsigned long BATTERY_STABILIZE_MS = 10000;
+unsigned long batteryStartTime = 0;
 
 // --- EEPROM Constants ---
 #define EEPROM_SIZE 64
@@ -185,6 +187,8 @@ void setup() {
 
   analogSetAttenuation(ADC_11db);
   analogSetWidth(9);
+  prevBatteryReading = analogRead(BATTERY_PIN);
+  batteryStartTime = millis();
 
   loadSettings();
   dataMutex = xSemaphoreCreateMutex();
@@ -247,13 +251,15 @@ void loop() {
   prevBatteryReading = (prevBatteryReading * (BATTERY_SMOOTHING - 1) + reading) / BATTERY_SMOOTHING;
   float voltage = prevBatteryReading / 510.11;
   batteryVoltage = round(voltage * 10) / 10.0;
-  if (batteryVoltage < 3.4) {
-    lowPowerScore++;
-  } else if (lowPowerScore > 0) {
-    lowPowerScore--;
-  }
-  if (lowPowerScore > 2000) {
-    Poweroff("Battery Low");
+  if (millis() - batteryStartTime > BATTERY_STABILIZE_MS) {
+    if (batteryVoltage < 3.4) {
+      lowPowerScore++;
+    } else if (lowPowerScore > 0) {
+      lowPowerScore--;
+    }
+    if (lowPowerScore > 2000) {
+      Poweroff("Battery Low");
+    }
   }
 
   if (localChannelPush == 1) {
