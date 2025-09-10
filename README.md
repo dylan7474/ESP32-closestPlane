@@ -18,8 +18,8 @@ Connect the following components to your ESP32:
 
 - **SH1106 128×64 OLED** (I²C): SDA → GPIO21, SCL → GPIO22, plus 3.3 V and GND.
 - **MAX98357A I2S amplifier**: BCLK → GPIO17, LRCLK → GPIO16, DIN → GPIO27, SD → GPIO19, 3.3 V and GND.
-- **Volume rotary encoder**: A → GPIO33, B → GPIO4, switch → GPIO23.
-- **Range/channel rotary encoder**: A → GPIO25, B → GPIO32, switch → GPIO2.
+- **Range rotary encoder**: A → GPIO33, B → GPIO4, switch → GPIO23.
+- **Mode/volume rotary encoder**: A → GPIO25, B → GPIO32, switch → GPIO2.
 
 ## Setup
 1. Rename `config.h` with your WiFi credentials, dump1090 server address and your latitude/longitude. Adjust I2S pin numbers if required.
@@ -29,10 +29,10 @@ Connect the following components to your ESP32:
 
 ## Operation
 - The display shows a radar sweep of aircraft within range. Each time the sweep crosses a target a short beep is produced.
+- Rotate the mode/volume encoder to adjust beep volume, sweep speed, alert distance, or to rotate the radar through the four compass points when compass mode is selected.
+- Press the mode/volume encoder to cycle between these control modes.
 - Rotate the range encoder to adjust radar range.
-- Press the range encoder to cycle the volume encoder between controlling beep volume, sweep speed, alert distance, and the radar compass point (indicated by an inverted "N").
-- Rotate the volume encoder to adjust the selected parameter or to rotate the radar through the four compass points when compass mode is selected.
-- Long-press the volume encoder to power off.
+- Long-press the range encoder to power off.
 - Settings persist in EEPROM and a small antenna icon indicates a good data connection.
 - Aircraft predicted to pass within the alert radius flash on the radar and trigger a single alert tone. The display shows minutes until the closest inbound aircraft reaches minimum distance.
 - Each aircraft is tracked individually in an `alertedFlights` list so it will only trigger the siren once while inbound.
