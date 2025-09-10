@@ -57,7 +57,7 @@ volatile int lastRSSI = -100;
 unsigned long lastReconnectAttempt = 0;
 
 // --- Control State Machine ---
-enum ControlMode { VOLUME, SPEED, ALERT, RADAR };
+enum ControlMode { VOLUME, SPEED, ALERT, RADAR, DIAG };
 ControlMode currentMode = VOLUME;
 
 // --- Control Variables ---
@@ -248,6 +248,7 @@ void loop() {
     if (currentMode == VOLUME) currentMode = SPEED;
     else if (currentMode == SPEED) currentMode = ALERT;
     else if (currentMode == ALERT) currentMode = RADAR;
+    else if (currentMode == RADAR) currentMode = DIAG;
     else currentMode = VOLUME;
   }
 
@@ -390,7 +391,7 @@ void loadSettings() {
     rangeStepIndex = constrain(rangeStepIndex, 0, rangeStepsCount - 1);
     sweepSpeedIndex = constrain(sweepSpeedIndex, 0, speedStepsCount - 1);
     inboundAlertDistanceKm = constrain(inboundAlertDistanceKm, 1.0f, 50.0f);
-    currentMode = (ControlMode)constrain((int)currentMode, 0, RADAR);
+    currentMode = (ControlMode)constrain((int)currentMode, 0, DIAG);
     compassIndex = constrain(compassIndex, 0, compassPointsCount - 1);
   } else {
     Serial.println("First run or invalid EEPROM data. Setting defaults.");
@@ -436,6 +437,10 @@ void drawRadarScreen() {
   display.print(":");
   display.print(inboundAlertDistanceKm, 0);
   display.print("k");
+  display.print(" ");
+  if (currentMode == DIAG) display.setTextColor(SH110X_BLACK, SH110X_WHITE);
+  display.print("D");
+  display.setTextColor(SH110X_WHITE);
 
   Aircraft currentAircraftToDisplay; // CHANGED
   Aircraft currentClosestInbound;
@@ -487,33 +492,48 @@ void drawRadarScreen() {
     display.print(currentClosestInbound.minutesToClosest, 1);
     display.print("m");
   }
-  display.setCursor(0, 56);
-  display.print(WiFi.localIP());
-  display.setCursor(SCREEN_WIDTH - 40, 56);
-  display.print(lastFetchDurationMs);
-  display.print("ms");
-
-  int16_t wifiBaseX = SCREEN_WIDTH - 10;
-  int16_t wifiBaseY = 8;
+  int16_t wifiBaseX = SCREEN_WIDTH - 4;
+  int16_t wifiBaseY = 12;
   if (WiFi.status() == WL_CONNECTED) {
     int bars = 0;
-    if (lastRSSI > -55) bars = 3;
-    else if (lastRSSI > -70) bars = 2;
+    if (lastRSSI > -55) bars = 4;
+    else if (lastRSSI > -65) bars = 3;
+    else if (lastRSSI > -75) bars = 2;
     else if (lastRSSI > -85) bars = 1;
     for (int i = 0; i < bars; i++) {
-      int h = (i + 1) * 2;
-      display.fillRect(wifiBaseX + i * 3, wifiBaseY - h, 2, h, SH110X_WHITE);
+      int h = (i + 1) * 3;
+      display.fillRect(wifiBaseX - i * 4 - 3, wifiBaseY - h, 3, h, SH110X_WHITE);
     }
   } else {
-    display.drawLine(wifiBaseX, wifiBaseY - 6, wifiBaseX + 6, wifiBaseY, SH110X_WHITE);
-    display.drawLine(wifiBaseX + 6, wifiBaseY - 6, wifiBaseX, wifiBaseY, SH110X_WHITE);
+    display.drawLine(wifiBaseX - 12, wifiBaseY - 12, wifiBaseX, wifiBaseY, SH110X_WHITE);
+    display.drawLine(wifiBaseX, wifiBaseY - 12, wifiBaseX - 12, wifiBaseY, SH110X_WHITE);
+  }
+  int16_t serverX = wifiBaseX - 18;
+  int16_t serverY = wifiBaseY - 3;
+  if (dataConnectionOk) {
+    display.fillRect(serverX, serverY, 6, 6, SH110X_WHITE);
+  } else {
+    display.drawRect(serverX, serverY, 6, 6, SH110X_WHITE);
+    display.drawLine(serverX, serverY, serverX + 6, serverY + 6, SH110X_WHITE);
+    display.drawLine(serverX + 6, serverY, serverX, serverY + 6, SH110X_WHITE);
   }
   if (lastFetchDurationMs > FETCH_SLOW_THRESHOLD_MS) {
-    display.drawLine(wifiBaseX - 4, wifiBaseY - 6, wifiBaseX - 4, wifiBaseY - 1, SH110X_WHITE);
-    display.drawPixel(wifiBaseX - 4, wifiBaseY, SH110X_WHITE);
+    display.drawLine(serverX - 4, serverY, serverX - 4, serverY + 5, SH110X_WHITE);
+    display.drawPixel(serverX - 4, serverY + 6, SH110X_WHITE);
   }
-  if (consecutiveFailures > 0) {
-    display.setCursor(SCREEN_WIDTH - 20, 0);
+  if (currentMode == DIAG) {
+    display.setCursor(0, 48);
+    display.print("IP:");
+    display.print(WiFi.localIP());
+    display.setCursor(0, 56);
+    display.print("RSSI:");
+    display.print(lastRSSI);
+    display.setCursor(64, 56);
+    display.print("T:");
+    display.print(lastFetchDurationMs);
+    display.print("ms");
+    display.setCursor(108, 56);
+    display.print("F:");
     display.print(consecutiveFailures);
   }
 
