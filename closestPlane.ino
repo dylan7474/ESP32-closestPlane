@@ -30,12 +30,17 @@
 
 // --- Battery Monitoring ---
 #define BATTERY_PIN 34
+#define VOLUME_BTN_PIN 23
+#define CHANNEL_BTN_PIN 2
 float batteryVoltage = 0.0;
 int prevBatteryReading = 0;
 const int BATTERY_SMOOTHING = 200;
 int lowPowerScore = 0;
 const unsigned long BATTERY_STABILIZE_MS = 10000;
 unsigned long batteryStartTime = 0;
+
+const unsigned long INPUT_STARTUP_DELAY_MS = 1000;
+unsigned long inputStartTime = 0;
 
 // --- EEPROM Constants ---
 #define EEPROM_SIZE 64
@@ -59,6 +64,7 @@ SimpleRotary ChannelSelector(25, 32, 2);
 volatile byte VolumeChange = 0, VolumePush = 0;
 volatile byte ChannelChange = 0, ChannelPush = 0;
 volatile bool dataConnectionOk = false;
+bool inputsArmed = false;
 
 // --- Control State Machine ---
 enum ControlMode { VOLUME, SPEED, ALERT, RADAR };
@@ -185,10 +191,14 @@ void setup() {
   Serial.begin(115200);
   Serial.println("Booting Multi-Target Radar (Enhanced)");
 
+  pinMode(VOLUME_BTN_PIN, INPUT_PULLUP);
+  pinMode(CHANNEL_BTN_PIN, INPUT_PULLUP);
+
   analogSetAttenuation(ADC_11db);
   analogSetWidth(9);
   prevBatteryReading = analogRead(BATTERY_PIN);
   batteryStartTime = millis();
+  inputStartTime = batteryStartTime;
 
   loadSettings();
   dataMutex = xSemaphoreCreateMutex();
@@ -238,14 +248,24 @@ void loop() {
   unsigned long currentTime = millis();
   unsigned long deltaTime = currentTime - lastFrameTime;
 
-  byte localVolumeChange = VolumeChange;
-  byte localVolumePush = VolumePush;
-  byte localChannelChange = ChannelChange;
-  byte localChannelPush = ChannelPush;
-  if (localVolumeChange != 0) VolumeChange = 0;
-  if (localVolumePush != 0) VolumePush = 0;
-  if (localChannelChange != 0) ChannelChange = 0;
-  if (localChannelPush != 0) ChannelPush = 0;
+  byte localVolumeChange = 0;
+  byte localVolumePush = 0;
+  byte localChannelChange = 0;
+  byte localChannelPush = 0;
+
+  if (inputsArmed) {
+    localVolumeChange = VolumeChange;
+    localVolumePush = VolumePush;
+    localChannelChange = ChannelChange;
+    localChannelPush = ChannelPush;
+  } else {
+    if (currentTime - inputStartTime >= INPUT_STARTUP_DELAY_MS &&
+        digitalRead(VOLUME_BTN_PIN) == HIGH &&
+        digitalRead(CHANNEL_BTN_PIN) == HIGH) {
+      inputsArmed = true;
+    }
+  }
+  VolumeChange = VolumePush = ChannelChange = ChannelPush = 0;
 
   int reading = analogRead(BATTERY_PIN);
   prevBatteryReading = (prevBatteryReading * (BATTERY_SMOOTHING - 1) + reading) / BATTERY_SMOOTHING;
