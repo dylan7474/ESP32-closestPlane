@@ -28,6 +28,13 @@
 #define RADAR_CENTER_Y 36
 #define RADAR_RADIUS 27
 
+// --- Battery Monitoring ---
+#define BATTERY_PIN 34
+float batteryVoltage = 0.0;
+int prevBatteryReading = 0;
+const int BATTERY_SMOOTHING = 200;
+int lowPowerScore = 0;
+
 // --- EEPROM Constants ---
 #define EEPROM_SIZE 64
 #define EEPROM_ADDR_MAGIC 0
@@ -176,6 +183,9 @@ void setup() {
   Serial.begin(115200);
   Serial.println("Booting Multi-Target Radar (Enhanced)");
 
+  analogSetAttenuation(ADC_11db);
+  analogSetWidth(9);
+
   loadSettings();
   dataMutex = xSemaphoreCreateMutex();
   lastPingedAircraft.isValid = false; // CHANGED: Initialize new display variable
@@ -232,6 +242,19 @@ void loop() {
   if (localVolumePush != 0) VolumePush = 0;
   if (localChannelChange != 0) ChannelChange = 0;
   if (localChannelPush != 0) ChannelPush = 0;
+
+  int reading = analogRead(BATTERY_PIN);
+  prevBatteryReading = (prevBatteryReading * (BATTERY_SMOOTHING - 1) + reading) / BATTERY_SMOOTHING;
+  float voltage = prevBatteryReading / 510.11;
+  batteryVoltage = round(voltage * 10) / 10.0;
+  if (batteryVoltage < 3.4) {
+    lowPowerScore++;
+  } else if (lowPowerScore > 0) {
+    lowPowerScore--;
+  }
+  if (lowPowerScore > 2000) {
+    Poweroff("Battery Low");
+  }
 
   if (localChannelPush == 1) {
     if (currentMode == VOLUME) currentMode = SPEED;
@@ -425,6 +448,19 @@ void drawRadarScreen() {
   display.print(inboundAlertDistanceKm, 0);
   display.print("k");
 
+  const float minVoltage = 3.2;
+  const float maxVoltage = 4.2;
+  const int batteryBarWidth = 24;
+  const int batteryBarHeight = 8;
+  int batteryX = SCREEN_WIDTH - batteryBarWidth - 2;
+  int batteryY = 0;
+  int batteryFill = (int)((batteryVoltage - minVoltage) / (maxVoltage - minVoltage) * batteryBarWidth);
+  batteryFill = constrain(batteryFill, 0, batteryBarWidth);
+  display.drawRect(batteryX, batteryY, batteryBarWidth, batteryBarHeight, SH110X_WHITE);
+  if (batteryFill > 0) {
+    display.fillRect(batteryX, batteryY, batteryFill, batteryBarHeight, SH110X_WHITE);
+  }
+
   Aircraft currentAircraftToDisplay; // CHANGED
   Aircraft currentClosestInbound;
   std::vector<RadarBlip> currentBlips;
@@ -477,7 +513,7 @@ void drawRadarScreen() {
   }
 
   // Draw WiFi signal strength meter
-  int16_t wifiX = SCREEN_WIDTH - 14;
+  int16_t wifiX = SCREEN_WIDTH - 14 - batteryBarWidth - 2;
   int16_t wifiY = 8;
   int bars = 0;
   if (WiFi.status() == WL_CONNECTED) {
