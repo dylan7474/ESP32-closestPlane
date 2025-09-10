@@ -474,12 +474,37 @@ void drawRadarScreen() {
     display.print("m");
   }
 
+  // Draw WiFi signal strength meter
+  int16_t wifiX = SCREEN_WIDTH - 14;
+  int16_t wifiY = 8;
+  int bars = 0;
+  if (WiFi.status() == WL_CONNECTED) {
+    long rssi = WiFi.RSSI();
+    if (rssi > -55)      bars = 4;
+    else if (rssi > -65) bars = 3;
+    else if (rssi > -75) bars = 2;
+    else if (rssi > -85) bars = 1;
+  }
+  for (int i = 0; i < 4; i++) {
+    int barHeight = (i + 1) * 2;
+    int barX = wifiX + i * 3;
+    int barY = wifiY - barHeight;
+    if (i < bars) {
+      display.fillRect(barX, barY, 2, barHeight, SH110X_WHITE);
+    } else {
+      display.drawRect(barX, barY, 2, barHeight, SH110X_WHITE);
+    }
+  }
+
+  // Dump1090 connection status indicator
+  int16_t dumpX = wifiX - 6;
+  int16_t dumpY = wifiY - 2;
   if (dataConnectionOk) {
-    int16_t baseX = SCREEN_WIDTH - 6;
-    int16_t baseY = 8;
-    display.drawLine(baseX, baseY, baseX, baseY - 4, SH110X_WHITE); 
-    display.drawLine(baseX, baseY - 4, baseX - 3, baseY - 7, SH110X_WHITE);
-    display.drawLine(baseX, baseY - 4, baseX + 3, baseY - 7, SH110X_WHITE);
+    display.fillCircle(dumpX, dumpY, 2, SH110X_WHITE);
+  } else {
+    display.drawCircle(dumpX, dumpY, 2, SH110X_WHITE);
+    display.drawLine(dumpX - 2, dumpY - 2, dumpX + 2, dumpY + 2, SH110X_WHITE);
+    display.drawLine(dumpX - 2, dumpY + 2, dumpX + 2, dumpY - 2, SH110X_WHITE);
   }
 
   display.drawCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS, SH110X_WHITE);
