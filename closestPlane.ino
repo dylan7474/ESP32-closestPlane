@@ -41,7 +41,9 @@
 
 // --- Display & Rotary Objects ---
 Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+// Rotary wired as "volume" now adjusts radar range (switch still powers off)
 SimpleRotary VolumeSelector(33, 4, 23);
+// Rotary wired as "channel" now controls volume/speed/alert/compass (switch still cycles modes)
 SimpleRotary ChannelSelector(25, 32, 2);
 
 // --- Volatile variables for ISR-safe encoder reading ---
@@ -135,9 +137,9 @@ void drawDottedCircle(int16_t x0, int16_t y0, int16_t r, uint16_t color);
 void encoderTask(void *pvParameters) {
   for (;;) {
     byte vol_rotate_event = VolumeSelector.rotate();
-    if (vol_rotate_event != 0) { VolumeChange = vol_rotate_event; }
+    if (vol_rotate_event != 0) { ChannelChange = vol_rotate_event; }
     byte chan_rotate_event = ChannelSelector.rotate();
-    if (chan_rotate_event != 0) { ChannelChange = chan_rotate_event; }
+    if (chan_rotate_event != 0) { VolumeChange = chan_rotate_event; }
     byte vol_push_event = VolumeSelector.pushType(200);
     if (vol_push_event != 0) { VolumePush = vol_push_event; }
     byte chan_push_event = ChannelSelector.pushType(200);
