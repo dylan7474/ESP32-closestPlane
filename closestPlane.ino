@@ -110,6 +110,15 @@ float lastSweepAngle = 0.0;
 std::vector<bool> paintedThisTurn;
 unsigned long lastFrameTime = 0;
 
+// --- Battery Monitoring Variables ---
+const int BATTERY_PIN = 34;                       // Analog pin used for battery sensing
+const int BATTERY_SMOOTHING_FACTOR = 200;         // Low-pass filter smoothing factor
+const float ADC_CONVERSION_FACTOR = 510.11f;      // Factor to convert ADC reading to volts
+const float LOW_POWER_THRESHOLD = 3.4f;           // Voltage level considered as low battery
+const int LOW_POWER_LIMIT = 2000;                 // Number of consecutive low readings before shutdown
+float smoothedBatteryReading = 0.0f;              // Stores smoothed analog value
+int LowPowerScore = 0;                            // Counter for low power condition duration
+
 // --- Function Prototypes ---
 void saveSettings();
 void loadSettings();
@@ -173,6 +182,8 @@ void fetchDataTask(void *pvParameters) {
 void setup() {
   pinMode(19, OUTPUT);
   digitalWrite(19, HIGH);
+  pinMode(BATTERY_PIN, INPUT);                      // Prepare battery voltage pin
+  smoothedBatteryReading = analogRead(BATTERY_PIN); // Prime the smoothing filter
   Serial.begin(115200);
   Serial.println("Booting Multi-Target Radar (Enhanced)");
 
@@ -223,6 +234,21 @@ void setup() {
 void loop() {
   unsigned long currentTime = millis();
   unsigned long deltaTime = currentTime - lastFrameTime;
+
+  // --- Battery Voltage Monitoring ---
+  int rawBattery = analogRead(BATTERY_PIN);                                                         // Read raw ADC value
+  smoothedBatteryReading = smoothedBatteryReading - (smoothedBatteryReading / BATTERY_SMOOTHING_FACTOR) + rawBattery; // Low-pass filter
+  float batteryVoltage = smoothedBatteryReading / ADC_CONVERSION_FACTOR;                            // Convert to actual voltage
+
+  // Accumulate a score if the voltage is below the safe threshold
+  if (batteryVoltage < LOW_POWER_THRESHOLD) {
+    LowPowerScore++;
+    if (LowPowerScore > LOW_POWER_LIMIT) {
+      Poweroff("Low Battery");                                                                      // Shutdown when score exceeds limit
+    }
+  } else {
+    LowPowerScore = 0;                                                                              // Reset score when voltage is healthy
+  }
 
   byte localVolumeChange = VolumeChange;
   byte localVolumePush = VolumePush;
@@ -339,17 +365,18 @@ void loop() {
   lastFrameTime = currentTime;
 }
 
+// Safely power down the device after displaying a message
 void Poweroff(String powermessage) {
   Serial.println("Powering off. Saving settings...");
-  saveSettings();
-  i2s_driver_uninstall(I2S_NUM_0);
+  saveSettings();                                    // Persist current settings
+  i2s_driver_uninstall(I2S_NUM_0);                   // Turn off audio hardware
   display.clearDisplay();
   display.setTextSize(2);
   display.setCursor(0, 0);
-  display.println(powermessage);
+  display.println(powermessage);                    // Show shutdown message
   display.display();
-  delay(1000);
-  digitalWrite(19, LOW);
+  delay(1000);                                      // Allow the user to read the message
+  digitalWrite(19, LOW);                            // Disable the power supply
 }
 
 void saveSettings() {
