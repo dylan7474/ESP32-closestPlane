@@ -30,8 +30,6 @@
 
 // --- Battery Monitoring ---
 #define BATTERY_PIN 34
-#define VOLUME_BTN_PIN 23
-#define CHANNEL_BTN_PIN 2
 float batteryVoltage = 0.0;
 int prevBatteryReading = 0;
 const int BATTERY_SMOOTHING = 200;
@@ -191,8 +189,6 @@ void setup() {
   Serial.begin(115200);
   Serial.println("Booting Multi-Target Radar (Enhanced)");
 
-  pinMode(VOLUME_BTN_PIN, INPUT_PULLUP);
-  pinMode(CHANNEL_BTN_PIN, INPUT_PULLUP);
 
   analogSetAttenuation(ADC_11db);
   analogSetWidth(9);
@@ -253,19 +249,18 @@ void loop() {
   byte localChannelChange = 0;
   byte localChannelPush = 0;
 
-  if (inputsArmed) {
+  if (!inputsArmed) {
+    if (currentTime - inputStartTime >= INPUT_STARTUP_DELAY_MS) {
+      inputsArmed = true;
+      VolumeChange = VolumePush = ChannelChange = ChannelPush = 0;
+    }
+  } else {
     localVolumeChange = VolumeChange;
     localVolumePush = VolumePush;
     localChannelChange = ChannelChange;
     localChannelPush = ChannelPush;
-  } else {
-    if (currentTime - inputStartTime >= INPUT_STARTUP_DELAY_MS &&
-        digitalRead(VOLUME_BTN_PIN) == HIGH &&
-        digitalRead(CHANNEL_BTN_PIN) == HIGH) {
-      inputsArmed = true;
-    }
+    VolumeChange = VolumePush = ChannelChange = ChannelPush = 0;
   }
-  VolumeChange = VolumePush = ChannelChange = ChannelPush = 0;
 
   int reading = analogRead(BATTERY_PIN);
   prevBatteryReading = (prevBatteryReading * (BATTERY_SMOOTHING - 1) + reading) / BATTERY_SMOOTHING;
