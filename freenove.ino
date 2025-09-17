@@ -345,7 +345,7 @@ void loop() {
       if (bearingCrossed) {
         double angleRad = targetBearing * PI / 180.0;
         double realDistance = trackedAircraft[i].distanceKm;
-        float ratio = radarRangeKm > 0 ? std::min(realDistance / radarRangeKm, 1.0f) : 0.0f;
+        float ratio = radarRangeKm > 0 ? std::min<float>(static_cast<float>(realDistance / radarRangeKm), 1.0f) : 0.0f;
         float screenRadius = ratio * RADAR_RADIUS;
         int16_t newBlipX = RADAR_CENTER_X + screenRadius * sin(angleRad);
         int16_t newBlipY = RADAR_CENTER_Y - screenRadius * cos(angleRad);
