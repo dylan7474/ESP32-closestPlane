@@ -241,8 +241,8 @@ void setup() {
 
   infoSprite.setColorDepth(16);
   radarSprite.setColorDepth(16);
-  uint16_t *infoBuffer = infoSprite.createSprite(INFO_PANEL_WIDTH, SCREEN_HEIGHT);
-  uint16_t *radarBuffer = radarSprite.createSprite(RADAR_AREA_WIDTH, SCREEN_HEIGHT);
+  void *infoBuffer = infoSprite.createSprite(INFO_PANEL_WIDTH, SCREEN_HEIGHT);
+  void *radarBuffer = radarSprite.createSprite(RADAR_AREA_WIDTH, SCREEN_HEIGHT);
   if (infoBuffer && radarBuffer) {
     useSpriteRendering = true;
     infoSprite.setSwapBytes(true);
