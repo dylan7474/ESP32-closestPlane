@@ -24,6 +24,7 @@
 #define RADAR_AREA_WIDTH (SCREEN_WIDTH - INFO_PANEL_WIDTH)
 #define RADAR_CENTER_X_LOCAL (RADAR_AREA_WIDTH / 2)
 #define REFRESH_INTERVAL_MS 5000
+#define FRAME_INTERVAL_MS 33
 #define WIFI_CONNECT_TIMEOUT_MS 10000
 
 // --- Radar Constants ---
@@ -58,6 +59,8 @@ static const uint16_t COLOR_GRID = 0x0400;
 static const uint16_t COLOR_SWEEP = 0x0640;
 static const uint16_t COLOR_BLIP_INBOUND = 0xFA08;
 static const uint16_t COLOR_BLIP_OUTBOUND = 0x463F;
+static const uint16_t COLOR_INFO_TEXT = COLOR_TEXT;
+static const uint16_t COLOR_INFO_BG = COLOR_PANEL_BG;
 // Rotary wired as "volume" now adjusts radar range (switch still powers off)
 SimpleRotary VolumeSelector(33, 4, 23);
 // Rotary wired as "channel" now controls volume/speed/alert/compass (switch still cycles modes)
@@ -126,12 +129,34 @@ float sweepAngle = 0.0;
 float lastSweepAngle = 0.0;
 std::vector<bool> paintedThisTurn;
 unsigned long lastFrameTime = 0;
+unsigned long lastDrawTime = 0;
+
+// --- UI State Cache ---
+struct PanelSnapshot {
+  bool hasAircraft;
+  Aircraft aircraft;
+  bool hasInbound;
+  Aircraft inbound;
+  ControlMode mode;
+  int volume;
+  int rangeIndex;
+  int speedIndex;
+  float alertDistanceKm;
+  float orientation;
+  float rangeKm;
+};
+
+PanelSnapshot lastPanelSnapshot = {};
+bool lastPanelValid = false;
+bool panelDirty = true;
 
 // --- Function Prototypes ---
 void saveSettings();
 void loadSettings();
 void fetchAircraft();
 void drawRadarScreen();
+void renderInfoPanel(const PanelSnapshot &snapshot);
+bool panelSnapshotsDiffer(const PanelSnapshot &a, const PanelSnapshot &b);
 void drawControlItem(TFT_eSprite &canvas, const char *label, const String &value, bool active, int &y);
 void drawStatusIndicators(TFT_eSprite &canvas);
 void drawRadarGrid(TFT_eSprite &canvas);
@@ -203,6 +228,7 @@ void setup() {
   closestInboundAircraft.isValid = false;
   
   tft.init();
+  tft.initDMA();
   tft.setRotation(1);
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(COLOR_TEXT, TFT_BLACK);
@@ -216,6 +242,7 @@ void setup() {
   infoSprite.createSprite(INFO_PANEL_WIDTH, SCREEN_HEIGHT);
   radarSprite.setColorDepth(16);
   radarSprite.createSprite(RADAR_AREA_WIDTH, SCREEN_HEIGHT);
+  radarSprite.setSwapBytes(true);
   
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   unsigned long wifiStart = millis();
@@ -260,12 +287,16 @@ void setup() {
 
   xTaskCreatePinnedToCore(fetchDataTask, "FetchData", 8192, NULL, 2, NULL, 0);
   xTaskCreatePinnedToCore(encoderTask, "Encoder", 2048, NULL, 3, NULL, 1);
+
+  lastFrameTime = millis();
+  lastDrawTime = lastFrameTime;
 }
 
 // --- MAIN LOOP ON CORE 1 (Graphics and Logic) ---
 void loop() {
   unsigned long currentTime = millis();
   unsigned long deltaTime = currentTime - lastFrameTime;
+  lastFrameTime = currentTime;
 
   byte localVolumeChange = VolumeChange;
   byte localVolumePush = VolumePush;
@@ -379,8 +410,12 @@ void loop() {
   }
   xSemaphoreGive(dataMutex);
 
-  drawRadarScreen();
-  lastFrameTime = currentTime;
+  if (currentTime - lastDrawTime >= FRAME_INTERVAL_MS) {
+    drawRadarScreen();
+    lastDrawTime = currentTime;
+  } else {
+    delay(1);
+  }
 }
 
 void Poweroff(String powermessage) {
@@ -513,51 +548,65 @@ void drawRadarGrid(TFT_eSprite &canvas) {
   canvas.print(compassLetters[compassIndex]);
 }
 
-void drawRadarScreen() {
-  Aircraft currentAircraftToDisplay;
-  Aircraft currentClosestInbound;
-  std::vector<RadarBlip> currentBlips;
+bool panelSnapshotsDiffer(const PanelSnapshot &a, const PanelSnapshot &b) {
+  if (a.hasAircraft != b.hasAircraft) return true;
+  if (a.hasAircraft) {
+    if (strncmp(a.aircraft.flight, b.aircraft.flight, sizeof(a.aircraft.flight)) != 0) return true;
+    if (fabs(a.aircraft.distanceKm - b.aircraft.distanceKm) > 0.1f) return true;
+    if (fabs(a.aircraft.bearing - b.aircraft.bearing) > 0.5f) return true;
+    if (a.aircraft.altitude != b.aircraft.altitude) return true;
+    if (fabs(a.aircraft.groundSpeed - b.aircraft.groundSpeed) > 0.5f) return true;
+  }
+  if (a.hasInbound != b.hasInbound) return true;
+  if (a.hasInbound) {
+    if (strncmp(a.inbound.flight, b.inbound.flight, sizeof(a.inbound.flight)) != 0) return true;
+    if (fabs(a.inbound.minutesToClosest - b.inbound.minutesToClosest) > 0.1f) return true;
+  }
+  if (a.mode != b.mode) return true;
+  if (a.volume != b.volume) return true;
+  if (a.rangeIndex != b.rangeIndex) return true;
+  if (a.speedIndex != b.speedIndex) return true;
+  if (fabs(a.alertDistanceKm - b.alertDistanceKm) > 0.1f) return true;
+  if (fabs(a.orientation - b.orientation) > 0.5f) return true;
+  if (fabs(a.rangeKm - b.rangeKm) > 0.1f) return true;
+  return false;
+}
 
-  xSemaphoreTake(dataMutex, portMAX_DELAY);
-  currentAircraftToDisplay = lastPingedAircraft;
-  currentBlips = activeBlips;
-  currentClosestInbound = closestInboundAircraft;
-  xSemaphoreGive(dataMutex);
-
-  infoSprite.fillSprite(COLOR_PANEL_BG);
-  radarSprite.fillSprite(COLOR_RADAR_BG);
+void renderInfoPanel(const PanelSnapshot &snapshot) {
+  infoSprite.fillSprite(COLOR_INFO_BG);
 
   int panelY = 8;
-  drawControlItem(infoSprite, "VOL", String(beepVolume), currentMode == VOLUME, panelY);
-  drawControlItem(infoSprite, "SPD", String((int)sweepSpeed), currentMode == SPEED, panelY);
-  drawControlItem(infoSprite, "ALR", String((int)inboundAlertDistanceKm) + "km", currentMode == ALERT, panelY);
-  drawControlItem(infoSprite, "HDG", String((int)radarOrientation), currentMode == RADAR, panelY);
-  drawControlItem(infoSprite, "RNG", String((int)radarRangeKm) + "km", false, panelY);
+  drawControlItem(infoSprite, "VOL", String(snapshot.volume), snapshot.mode == VOLUME, panelY);
+  int speedIdx = constrain(snapshot.speedIndex, 0, speedStepsCount - 1);
+  drawControlItem(infoSprite, "SPD", String((int)sweepSpeedSteps[speedIdx]), snapshot.mode == SPEED, panelY);
+  drawControlItem(infoSprite, "ALR", String((int)snapshot.alertDistanceKm) + "km", snapshot.mode == ALERT, panelY);
+  drawControlItem(infoSprite, "HDG", String((int)snapshot.orientation), snapshot.mode == RADAR, panelY);
+  drawControlItem(infoSprite, "RNG", String((int)snapshot.rangeKm) + "km", false, panelY);
 
   int infoY = panelY + 4;
-  infoSprite.setTextColor(COLOR_TEXT, COLOR_PANEL_BG);
+  infoSprite.setTextColor(COLOR_INFO_TEXT, COLOR_INFO_BG);
   infoSprite.setTextSize(2);
 
-  if (currentAircraftToDisplay.isValid) {
-    const char *flight = strlen(currentAircraftToDisplay.flight) > 0 ? currentAircraftToDisplay.flight : "------";
+  if (snapshot.hasAircraft) {
+    const char *flight = strlen(snapshot.aircraft.flight) > 0 ? snapshot.aircraft.flight : "------";
     infoSprite.setCursor(12, infoY);
     infoSprite.print("Flight: ");
     infoSprite.println(flight);
     infoY += 24;
     infoSprite.setCursor(12, infoY);
     infoSprite.print("Dist: ");
-    infoSprite.print(currentAircraftToDisplay.distanceKm, 1);
+    infoSprite.print(snapshot.aircraft.distanceKm, 1);
     infoSprite.println(" km");
     infoY += 24;
     infoSprite.setCursor(12, infoY);
     infoSprite.print("Bear: ");
-    infoSprite.print(currentAircraftToDisplay.bearing, 0);
+    infoSprite.print(snapshot.aircraft.bearing, 0);
     infoSprite.println(" deg");
     infoY += 24;
     infoSprite.setCursor(12, infoY);
     infoSprite.print("Alt: ");
-    if (currentAircraftToDisplay.altitude >= 0) {
-      infoSprite.print(currentAircraftToDisplay.altitude);
+    if (snapshot.aircraft.altitude >= 0) {
+      infoSprite.print(snapshot.aircraft.altitude);
       infoSprite.println(" ft");
     } else {
       infoSprite.println("---");
@@ -565,8 +614,8 @@ void drawRadarScreen() {
     infoY += 24;
     infoSprite.setCursor(12, infoY);
     infoSprite.print("Speed: ");
-    if (currentAircraftToDisplay.groundSpeed >= 0) {
-      infoSprite.print(currentAircraftToDisplay.groundSpeed, 0);
+    if (snapshot.aircraft.groundSpeed >= 0) {
+      infoSprite.print(snapshot.aircraft.groundSpeed, 0);
       infoSprite.println(" kt");
     } else {
       infoSprite.println("---");
@@ -577,26 +626,62 @@ void drawRadarScreen() {
     infoY += 24;
     infoSprite.setCursor(12, infoY);
     infoSprite.print("Range: ");
-    infoSprite.print(radarRangeKm, 0);
+    infoSprite.print(snapshot.rangeKm, 0);
     infoSprite.println(" km");
   }
 
   int inboundY = SCREEN_HEIGHT - 56;
-  if (currentClosestInbound.isInbound && currentClosestInbound.minutesToClosest >= 0) {
-    infoSprite.setTextColor(COLOR_BLIP_INBOUND, COLOR_PANEL_BG);
+  if (snapshot.hasInbound && snapshot.inbound.minutesToClosest >= 0) {
+    infoSprite.setTextColor(COLOR_BLIP_INBOUND, COLOR_INFO_BG);
     infoSprite.setCursor(12, inboundY - 4);
     infoSprite.print("Inbound: ");
-    infoSprite.println(strlen(currentClosestInbound.flight) > 0 ? currentClosestInbound.flight : "------");
+    infoSprite.println(strlen(snapshot.inbound.flight) > 0 ? snapshot.inbound.flight : "------");
     infoSprite.setCursor(12, inboundY + 20);
     infoSprite.print("ETA: ");
-    infoSprite.print(currentClosestInbound.minutesToClosest, 1);
+    infoSprite.print(snapshot.inbound.minutesToClosest, 1);
     infoSprite.println(" min");
-    infoSprite.setTextColor(COLOR_TEXT, COLOR_PANEL_BG);
+    infoSprite.setTextColor(COLOR_INFO_TEXT, COLOR_INFO_BG);
   } else {
-    infoSprite.setTextColor(COLOR_TEXT, COLOR_PANEL_BG);
+    infoSprite.setTextColor(COLOR_INFO_TEXT, COLOR_INFO_BG);
     infoSprite.setCursor(12, inboundY + 8);
     infoSprite.println("No inbound alert");
   }
+}
+
+void drawRadarScreen() {
+  tft.dmaWait();
+
+  Aircraft currentAircraftToDisplay;
+  Aircraft currentClosestInbound;
+  std::vector<RadarBlip> currentBlips;
+
+  xSemaphoreTake(dataMutex, portMAX_DELAY);
+  currentAircraftToDisplay = lastPingedAircraft;
+  currentBlips = activeBlips;
+  currentClosestInbound = closestInboundAircraft;
+  xSemaphoreGive(dataMutex);
+
+  PanelSnapshot snapshot = {};
+  snapshot.hasAircraft = currentAircraftToDisplay.isValid;
+  snapshot.aircraft = currentAircraftToDisplay;
+  snapshot.hasInbound = currentClosestInbound.isInbound && currentClosestInbound.minutesToClosest >= 0;
+  snapshot.inbound = currentClosestInbound;
+  snapshot.mode = currentMode;
+  snapshot.volume = beepVolume;
+  snapshot.rangeIndex = rangeStepIndex;
+  snapshot.speedIndex = sweepSpeedIndex;
+  snapshot.alertDistanceKm = inboundAlertDistanceKm;
+  snapshot.orientation = radarOrientation;
+  snapshot.rangeKm = radarRangeKm;
+
+  if (!lastPanelValid || panelSnapshotsDiffer(snapshot, lastPanelSnapshot)) {
+    renderInfoPanel(snapshot);
+    lastPanelSnapshot = snapshot;
+    lastPanelValid = true;
+    panelDirty = true;
+  }
+
+  radarSprite.fillSprite(COLOR_RADAR_BG);
 
   radarSprite.setTextSize(2);
   radarSprite.setTextColor(COLOR_TEXT, COLOR_RADAR_BG);
@@ -634,8 +719,14 @@ void drawRadarScreen() {
   int16_t sweepY = RADAR_CENTER_Y - (RADAR_RADIUS - 2) * cos(sweepRad);
   radarSprite.drawLine(RADAR_CENTER_X_LOCAL, RADAR_CENTER_Y, sweepX, sweepY, COLOR_SWEEP);
 
-  infoSprite.pushSprite(0, 0);
-  radarSprite.pushSprite(INFO_PANEL_WIDTH, 0);
+  tft.startWrite();
+  if (panelDirty) {
+    infoSprite.pushSprite(0, 0);
+    panelDirty = false;
+  }
+  tft.pushImageDMA(INFO_PANEL_WIDTH, 0, RADAR_AREA_WIDTH, SCREEN_HEIGHT, (uint16_t *)radarSprite.getPointer());
+  tft.dmaWait();
+  tft.endWrite();
 }
 
 void fetchAircraft() {
