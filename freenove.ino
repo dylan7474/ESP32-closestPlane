@@ -50,6 +50,7 @@
 TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite infoSprite = TFT_eSprite(&tft);
 TFT_eSprite radarSprite = TFT_eSprite(&tft);
+bool useSpriteRendering = false;
 
 static const uint16_t COLOR_PANEL_BG = 0x1106;
 static const uint16_t COLOR_MODE_ACTIVE = 0x0640;
@@ -155,11 +156,11 @@ void saveSettings();
 void loadSettings();
 void fetchAircraft();
 void drawRadarScreen();
-void renderInfoPanel(const PanelSnapshot &snapshot);
+void renderInfoPanel(TFT_eSPI &canvas, const PanelSnapshot &snapshot);
 bool panelSnapshotsDiffer(const PanelSnapshot &a, const PanelSnapshot &b);
-void drawControlItem(TFT_eSprite &canvas, const char *label, const String &value, bool active, int &y);
-void drawStatusIndicators(TFT_eSprite &canvas);
-void drawRadarGrid(TFT_eSprite &canvas);
+void drawControlItem(TFT_eSPI &canvas, const char *label, const String &value, bool active, int &y);
+void drawStatusIndicators(TFT_eSPI &canvas, int16_t originX);
+void drawRadarGrid(TFT_eSPI &canvas, int16_t originX);
 void fetchDataTask(void *pvParameters);
 void encoderTask(void *pvParameters);
 void Poweroff(String powermessage);
@@ -169,7 +170,7 @@ void playBeep(int freq, int duration_ms);
 void playSiren(int startFreq, int endFreq, int duration_ms);
 int getBeepFrequencyForAltitude(int altitude);
 double deg2rad(double deg);
-void drawDottedCircle(TFT_eSprite &canvas, int16_t x0, int16_t y0, int16_t r, uint16_t color);
+void drawDottedCircle(TFT_eSPI &canvas, int16_t x0, int16_t y0, int16_t r, uint16_t color);
 
 // --- BEEP FREQUENCY BANDS ---
 #define ALT_LOW_FEET 10000
@@ -239,10 +240,22 @@ void setup() {
   tft.println("Connecting WiFi...");
 
   infoSprite.setColorDepth(16);
-  infoSprite.createSprite(INFO_PANEL_WIDTH, SCREEN_HEIGHT);
   radarSprite.setColorDepth(16);
-  radarSprite.createSprite(RADAR_AREA_WIDTH, SCREEN_HEIGHT);
-  radarSprite.setSwapBytes(true);
+  uint16_t *infoBuffer = infoSprite.createSprite(INFO_PANEL_WIDTH, SCREEN_HEIGHT);
+  uint16_t *radarBuffer = radarSprite.createSprite(RADAR_AREA_WIDTH, SCREEN_HEIGHT);
+  if (infoBuffer && radarBuffer) {
+    useSpriteRendering = true;
+    infoSprite.setSwapBytes(true);
+    radarSprite.setSwapBytes(true);
+  } else {
+    Serial.println("Sprite allocation failed, falling back to direct rendering.");
+    if (infoBuffer) {
+      infoSprite.deleteSprite();
+    }
+    if (radarBuffer) {
+      radarSprite.deleteSprite();
+    }
+  }
   
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   unsigned long wifiStart = millis();
@@ -478,7 +491,7 @@ void loadSettings() {
   Serial.printf("Loaded Alert Dist: %.1f km\n", inboundAlertDistanceKm);
 }
 
-void drawControlItem(TFT_eSprite &canvas, const char *label, const String &value, bool active, int &y) {
+void drawControlItem(TFT_eSPI &canvas, const char *label, const String &value, bool active, int &y) {
   const int boxHeight = 28;
   const int boxX = 8;
   const int boxWidth = INFO_PANEL_WIDTH - 16;
@@ -495,8 +508,8 @@ void drawControlItem(TFT_eSprite &canvas, const char *label, const String &value
   canvas.setTextColor(COLOR_TEXT, COLOR_PANEL_BG);
 }
 
-void drawStatusIndicators(TFT_eSprite &canvas) {
-  const int baseX = RADAR_AREA_WIDTH - 52;
+void drawStatusIndicators(TFT_eSPI &canvas, int16_t originX) {
+  const int baseX = originX + RADAR_AREA_WIDTH - 52;
   const int baseY = 44;
   const int barWidth = 6;
   const int barSpacing = 4;
@@ -534,17 +547,19 @@ void drawStatusIndicators(TFT_eSprite &canvas) {
   }
 }
 
-void drawRadarGrid(TFT_eSprite &canvas) {
-  canvas.drawCircle(RADAR_CENTER_X_LOCAL, RADAR_CENTER_Y, RADAR_RADIUS, COLOR_GRID);
-  drawDottedCircle(canvas, RADAR_CENTER_X_LOCAL, RADAR_CENTER_Y, RADAR_RADIUS * 2 / 3, COLOR_GRID);
-  drawDottedCircle(canvas, RADAR_CENTER_X_LOCAL, RADAR_CENTER_Y, RADAR_RADIUS / 3, COLOR_GRID);
-  canvas.drawLine(RADAR_CENTER_X_LOCAL - RADAR_RADIUS, RADAR_CENTER_Y, RADAR_CENTER_X_LOCAL + RADAR_RADIUS, RADAR_CENTER_Y, COLOR_GRID);
-  canvas.drawLine(RADAR_CENTER_X_LOCAL, RADAR_CENTER_Y - RADAR_RADIUS, RADAR_CENTER_X_LOCAL, RADAR_CENTER_Y + RADAR_RADIUS, COLOR_GRID);
+void drawRadarGrid(TFT_eSPI &canvas, int16_t originX) {
+  int16_t centerX = originX + RADAR_CENTER_X_LOCAL;
+  int16_t centerY = RADAR_CENTER_Y;
+  canvas.drawCircle(centerX, centerY, RADAR_RADIUS, COLOR_GRID);
+  drawDottedCircle(canvas, centerX, centerY, RADAR_RADIUS * 2 / 3, COLOR_GRID);
+  drawDottedCircle(canvas, centerX, centerY, RADAR_RADIUS / 3, COLOR_GRID);
+  canvas.drawLine(centerX - RADAR_RADIUS, centerY, centerX + RADAR_RADIUS, centerY, COLOR_GRID);
+  canvas.drawLine(centerX, centerY - RADAR_RADIUS, centerX, centerY + RADAR_RADIUS, COLOR_GRID);
 
   static const char compassLetters[] = {'N', 'E', 'S', 'W'};
   canvas.setTextColor(COLOR_TEXT, COLOR_RADAR_BG);
   canvas.setTextSize(2);
-  canvas.setCursor(RADAR_CENTER_X_LOCAL - 10, RADAR_CENTER_Y - RADAR_RADIUS - 24);
+  canvas.setCursor(centerX - 10, centerY - RADAR_RADIUS - 24);
   canvas.print(compassLetters[compassIndex]);
 }
 
@@ -572,79 +587,79 @@ bool panelSnapshotsDiffer(const PanelSnapshot &a, const PanelSnapshot &b) {
   return false;
 }
 
-void renderInfoPanel(const PanelSnapshot &snapshot) {
-  infoSprite.fillSprite(COLOR_INFO_BG);
+void renderInfoPanel(TFT_eSPI &canvas, const PanelSnapshot &snapshot) {
+  canvas.fillRect(0, 0, INFO_PANEL_WIDTH, SCREEN_HEIGHT, COLOR_INFO_BG);
 
   int panelY = 8;
-  drawControlItem(infoSprite, "VOL", String(snapshot.volume), snapshot.mode == VOLUME, panelY);
+  drawControlItem(canvas, "VOL", String(snapshot.volume), snapshot.mode == VOLUME, panelY);
   int speedIdx = constrain(snapshot.speedIndex, 0, speedStepsCount - 1);
-  drawControlItem(infoSprite, "SPD", String((int)sweepSpeedSteps[speedIdx]), snapshot.mode == SPEED, panelY);
-  drawControlItem(infoSprite, "ALR", String((int)snapshot.alertDistanceKm) + "km", snapshot.mode == ALERT, panelY);
-  drawControlItem(infoSprite, "HDG", String((int)snapshot.orientation), snapshot.mode == RADAR, panelY);
-  drawControlItem(infoSprite, "RNG", String((int)snapshot.rangeKm) + "km", false, panelY);
+  drawControlItem(canvas, "SPD", String((int)sweepSpeedSteps[speedIdx]), snapshot.mode == SPEED, panelY);
+  drawControlItem(canvas, "ALR", String((int)snapshot.alertDistanceKm) + "km", snapshot.mode == ALERT, panelY);
+  drawControlItem(canvas, "HDG", String((int)snapshot.orientation), snapshot.mode == RADAR, panelY);
+  drawControlItem(canvas, "RNG", String((int)snapshot.rangeKm) + "km", false, panelY);
 
   int infoY = panelY + 4;
-  infoSprite.setTextColor(COLOR_INFO_TEXT, COLOR_INFO_BG);
-  infoSprite.setTextSize(2);
+  canvas.setTextColor(COLOR_INFO_TEXT, COLOR_INFO_BG);
+  canvas.setTextSize(2);
 
   if (snapshot.hasAircraft) {
     const char *flight = strlen(snapshot.aircraft.flight) > 0 ? snapshot.aircraft.flight : "------";
-    infoSprite.setCursor(12, infoY);
-    infoSprite.print("Flight: ");
-    infoSprite.println(flight);
+    canvas.setCursor(12, infoY);
+    canvas.print("Flight: ");
+    canvas.println(flight);
     infoY += 24;
-    infoSprite.setCursor(12, infoY);
-    infoSprite.print("Dist: ");
-    infoSprite.print(snapshot.aircraft.distanceKm, 1);
-    infoSprite.println(" km");
+    canvas.setCursor(12, infoY);
+    canvas.print("Dist: ");
+    canvas.print(snapshot.aircraft.distanceKm, 1);
+    canvas.println(" km");
     infoY += 24;
-    infoSprite.setCursor(12, infoY);
-    infoSprite.print("Bear: ");
-    infoSprite.print(snapshot.aircraft.bearing, 0);
-    infoSprite.println(" deg");
+    canvas.setCursor(12, infoY);
+    canvas.print("Bear: ");
+    canvas.print(snapshot.aircraft.bearing, 0);
+    canvas.println(" deg");
     infoY += 24;
-    infoSprite.setCursor(12, infoY);
-    infoSprite.print("Alt: ");
+    canvas.setCursor(12, infoY);
+    canvas.print("Alt: ");
     if (snapshot.aircraft.altitude >= 0) {
-      infoSprite.print(snapshot.aircraft.altitude);
-      infoSprite.println(" ft");
+      canvas.print(snapshot.aircraft.altitude);
+      canvas.println(" ft");
     } else {
-      infoSprite.println("---");
+      canvas.println("---");
     }
     infoY += 24;
-    infoSprite.setCursor(12, infoY);
-    infoSprite.print("Speed: ");
+    canvas.setCursor(12, infoY);
+    canvas.print("Speed: ");
     if (snapshot.aircraft.groundSpeed >= 0) {
-      infoSprite.print(snapshot.aircraft.groundSpeed, 0);
-      infoSprite.println(" kt");
+      canvas.print(snapshot.aircraft.groundSpeed, 0);
+      canvas.println(" kt");
     } else {
-      infoSprite.println("---");
+      canvas.println("---");
     }
   } else {
-    infoSprite.setCursor(12, infoY);
-    infoSprite.println("Scanning...");
+    canvas.setCursor(12, infoY);
+    canvas.println("Scanning...");
     infoY += 24;
-    infoSprite.setCursor(12, infoY);
-    infoSprite.print("Range: ");
-    infoSprite.print(snapshot.rangeKm, 0);
-    infoSprite.println(" km");
+    canvas.setCursor(12, infoY);
+    canvas.print("Range: ");
+    canvas.print(snapshot.rangeKm, 0);
+    canvas.println(" km");
   }
 
   int inboundY = SCREEN_HEIGHT - 56;
   if (snapshot.hasInbound && snapshot.inbound.minutesToClosest >= 0) {
-    infoSprite.setTextColor(COLOR_BLIP_INBOUND, COLOR_INFO_BG);
-    infoSprite.setCursor(12, inboundY - 4);
-    infoSprite.print("Inbound: ");
-    infoSprite.println(strlen(snapshot.inbound.flight) > 0 ? snapshot.inbound.flight : "------");
-    infoSprite.setCursor(12, inboundY + 20);
-    infoSprite.print("ETA: ");
-    infoSprite.print(snapshot.inbound.minutesToClosest, 1);
-    infoSprite.println(" min");
-    infoSprite.setTextColor(COLOR_INFO_TEXT, COLOR_INFO_BG);
+    canvas.setTextColor(COLOR_BLIP_INBOUND, COLOR_INFO_BG);
+    canvas.setCursor(12, inboundY - 4);
+    canvas.print("Inbound: ");
+    canvas.println(strlen(snapshot.inbound.flight) > 0 ? snapshot.inbound.flight : "------");
+    canvas.setCursor(12, inboundY + 20);
+    canvas.print("ETA: ");
+    canvas.print(snapshot.inbound.minutesToClosest, 1);
+    canvas.println(" min");
+    canvas.setTextColor(COLOR_INFO_TEXT, COLOR_INFO_BG);
   } else {
-    infoSprite.setTextColor(COLOR_INFO_TEXT, COLOR_INFO_BG);
-    infoSprite.setCursor(12, inboundY + 8);
-    infoSprite.println("No inbound alert");
+    canvas.setTextColor(COLOR_INFO_TEXT, COLOR_INFO_BG);
+    canvas.setCursor(12, inboundY + 8);
+    canvas.println("No inbound alert");
   }
 }
 
@@ -673,27 +688,35 @@ void drawRadarScreen() {
   snapshot.rangeKm = radarRangeKm;
 
   if (!lastPanelValid || panelSnapshotsDiffer(snapshot, lastPanelSnapshot)) {
-    renderInfoPanel(snapshot);
+    if (useSpriteRendering) {
+      renderInfoPanel(infoSprite, snapshot);
+      panelDirty = true;
+    } else {
+      renderInfoPanel(tft, snapshot);
+      panelDirty = false;
+    }
     lastPanelSnapshot = snapshot;
     lastPanelValid = true;
-    panelDirty = true;
   }
 
-  radarSprite.fillSprite(COLOR_RADAR_BG);
+  TFT_eSPI *radarCanvas = useSpriteRendering ? static_cast<TFT_eSPI*>(&radarSprite) : &tft;
+  int16_t originX = useSpriteRendering ? 0 : INFO_PANEL_WIDTH;
 
-  radarSprite.setTextSize(2);
-  radarSprite.setTextColor(COLOR_TEXT, COLOR_RADAR_BG);
-  radarSprite.setCursor(12, 12);
-  radarSprite.print("Range: ");
-  radarSprite.print(radarRangeKm, 0);
-  radarSprite.println(" km");
-  radarSprite.setCursor(12, 36);
-  radarSprite.print("Heading: ");
-  radarSprite.print(radarOrientation, 0);
-  radarSprite.println(" deg");
+  radarCanvas->fillRect(originX, 0, RADAR_AREA_WIDTH, SCREEN_HEIGHT, COLOR_RADAR_BG);
 
-  drawRadarGrid(radarSprite);
-  drawStatusIndicators(radarSprite);
+  radarCanvas->setTextSize(2);
+  radarCanvas->setTextColor(COLOR_TEXT, COLOR_RADAR_BG);
+  radarCanvas->setCursor(originX + 12, 12);
+  radarCanvas->print("Range: ");
+  radarCanvas->print(radarRangeKm, 0);
+  radarCanvas->println(" km");
+  radarCanvas->setCursor(originX + 12, 36);
+  radarCanvas->print("Heading: ");
+  radarCanvas->print(radarOrientation, 0);
+  radarCanvas->println(" deg");
+
+  drawRadarGrid(*radarCanvas, originX);
+  drawStatusIndicators(*radarCanvas, originX);
 
   unsigned long flashPhase = millis() / 200;
   for (const auto &blip : currentBlips) {
@@ -709,19 +732,23 @@ void drawRadarScreen() {
     } else {
       radius = 2;
     }
-    radarSprite.fillCircle(blip.x, blip.y, radius, color);
+    int16_t drawX = originX + blip.x;
+    int16_t drawY = blip.y;
+    radarCanvas->fillCircle(drawX, drawY, radius, color);
   }
 
   double sweepRad = sweepAngle * PI / 180.0;
-  int16_t sweepX = RADAR_CENTER_X_LOCAL + (RADAR_RADIUS - 2) * sin(sweepRad);
+  int16_t sweepX = originX + RADAR_CENTER_X_LOCAL + (RADAR_RADIUS - 2) * sin(sweepRad);
   int16_t sweepY = RADAR_CENTER_Y - (RADAR_RADIUS - 2) * cos(sweepRad);
-  radarSprite.drawLine(RADAR_CENTER_X_LOCAL, RADAR_CENTER_Y, sweepX, sweepY, COLOR_SWEEP);
+  radarCanvas->drawLine(originX + RADAR_CENTER_X_LOCAL, RADAR_CENTER_Y, sweepX, sweepY, COLOR_SWEEP);
 
-  if (panelDirty) {
-    infoSprite.pushSprite(0, 0);
-    panelDirty = false;
+  if (useSpriteRendering) {
+    if (panelDirty) {
+      infoSprite.pushSprite(0, 0);
+      panelDirty = false;
+    }
+    radarSprite.pushSprite(INFO_PANEL_WIDTH, 0);
   }
-  radarSprite.pushSprite(INFO_PANEL_WIDTH, 0);
 }
 
 void fetchAircraft() {
@@ -903,7 +930,7 @@ double calculateBearing(double lat1, double lon1, double lat2, double lon2) {
 }
 
 // Custom function to draw a dotted circle
-void drawDottedCircle(TFT_eSprite &canvas, int16_t x0, int16_t y0, int16_t r, uint16_t color) {
+void drawDottedCircle(TFT_eSPI &canvas, int16_t x0, int16_t y0, int16_t r, uint16_t color) {
   const int step = 12;
   for (int angle = 0; angle < 360; angle += step) {
     double angleRad = angle * PI / 180.0;
