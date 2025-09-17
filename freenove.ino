@@ -11,6 +11,7 @@
 #include <vector>
 #include <EEPROM.h>
 #include <algorithm>
+#include <cstring>
 
 // Configure TFT_eSPI with the Freenove ESP32 CYD ST7796 panel setup before compiling.
 
@@ -227,8 +228,24 @@ void setup() {
     tft.println("WiFi Failed");
   }
 
-  i2s_config_t i2s_config = {.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX), .sample_rate = 44100, .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT, .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT, .communication_format = I2S_COMM_FORMAT_STAND_I2S, .intr_alloc_flags = 0, .dma_buf_count = 8, .dma_buf_len = 64, .use_apll = false, .tx_desc_auto_clear = true, .fixed_mclk = 0};
-  i2s_pin_config_t pin_config = {.bck_io_num = I2S_BCLK_PIN, .ws_io_num = I2S_LRCLK_PIN, .data_out_num = I2S_DOUT_PIN, .data_in_num = I2S_PIN_NO_CHANGE};
+  i2s_config_t i2s_config = {};
+  i2s_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
+  i2s_config.sample_rate = 44100;
+  i2s_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
+  i2s_config.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;
+  i2s_config.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+  i2s_config.intr_alloc_flags = 0;
+  i2s_config.dma_buf_count = 8;
+  i2s_config.dma_buf_len = 64;
+  i2s_config.use_apll = false;
+  i2s_config.tx_desc_auto_clear = true;
+  i2s_config.fixed_mclk = 0;
+
+  i2s_pin_config_t pin_config = {};
+  pin_config.bck_io_num = I2S_BCLK_PIN;
+  pin_config.ws_io_num = I2S_LRCLK_PIN;
+  pin_config.data_out_num = I2S_DOUT_PIN;
+  pin_config.data_in_num = I2S_PIN_NO_CHANGE;
   i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
   i2s_set_pin(I2S_NUM_0, &pin_config);
 
@@ -328,7 +345,7 @@ void loop() {
       if (bearingCrossed) {
         double angleRad = targetBearing * PI / 180.0;
         double realDistance = trackedAircraft[i].distanceKm;
-        float ratio = radarRangeKm > 0 ? std::min(realDistance / radarRangeKm, 1.0f) : 0.0f;
+        float ratio = radarRangeKm > 0 ? std::min<float>(static_cast<float>(realDistance / radarRangeKm), 1.0f) : 0.0f;
         float screenRadius = ratio * RADAR_RADIUS;
         int16_t newBlipX = RADAR_CENTER_X + screenRadius * sin(angleRad);
         int16_t newBlipY = RADAR_CENTER_Y - screenRadius * cos(angleRad);
@@ -621,7 +638,7 @@ void fetchAircraft() {
 
   int httpCode = http.GET();
   if (httpCode == HTTP_CODE_OK) {
-    DynamicJsonDocument filter(512);
+    ArduinoJson::DynamicJsonDocument filter(512);
     filter["aircraft"][0]["lat"] = true;
     filter["aircraft"][0]["lon"] = true;
     filter["aircraft"][0]["flight"] = true;
@@ -629,17 +646,17 @@ void fetchAircraft() {
     filter["aircraft"][0]["gs"] = true;
     filter["aircraft"][0]["track"] = true;
 
-    DynamicJsonDocument doc(8192); 
-    if (deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter)) == DeserializationError::Ok) {
+    ArduinoJson::DynamicJsonDocument doc(8192);
+    if (deserializeJson(doc, http.getStream(), ArduinoJson::DeserializationOption::Filter(filter)) == ArduinoJson::DeserializationError::Ok) {
       dataConnectionOk = true;
-      JsonArray arr = doc["aircraft"].as<JsonArray>();
+      ArduinoJson::JsonArray arr = doc["aircraft"].as<ArduinoJson::JsonArray>();
       
       std::vector<Aircraft> planesInRange;
       Aircraft bestInbound;
       bestInbound.isInbound = false;
       bestInbound.isValid = false;
 
-      for (JsonObject plane : arr) {
+      for (ArduinoJson::JsonObject plane : arr) {
         if (plane.containsKey("lat") && plane.containsKey("lon")) {
           double dist = haversine(USER_LAT, USER_LON, plane["lat"], plane["lon"]);
 
@@ -661,7 +678,7 @@ void fetchAircraft() {
             ac.bearing = calculateBearing(USER_LAT, USER_LON, plane["lat"], plane["lon"]);
             
             if (plane.containsKey("alt_baro")) {
-              JsonVariant alt = plane["alt_baro"];
+              ArduinoJson::JsonVariant alt = plane["alt_baro"];
               if (alt.is<int>()) {
                 ac.altitude = alt.as<int>();
               } else if (alt.is<const char*>() && strcmp(alt.as<const char*>(), "ground") == 0) {
@@ -797,4 +814,3 @@ void drawDottedCircle(int16_t x0, int16_t y0, int16_t r, uint16_t color) {
     tft.drawPixel(x, y, color);
   }
 }
-
