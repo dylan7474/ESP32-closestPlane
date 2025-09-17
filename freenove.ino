@@ -21,6 +21,8 @@
 #define SCREEN_WIDTH 480
 #define SCREEN_HEIGHT 320
 #define INFO_PANEL_WIDTH 160
+#define RADAR_AREA_WIDTH (SCREEN_WIDTH - INFO_PANEL_WIDTH)
+#define RADAR_CENTER_X_LOCAL (RADAR_AREA_WIDTH / 2)
 #define REFRESH_INTERVAL_MS 5000
 #define WIFI_CONNECT_TIMEOUT_MS 10000
 
@@ -28,7 +30,7 @@
 #define EARTH_RADIUS_KM 6371.0
 #define BLIP_LIFESPAN_FRAMES 90
 #define MAX_BLIPS 20
-#define RADAR_CENTER_X (INFO_PANEL_WIDTH + 160)
+#define RADAR_CENTER_X (INFO_PANEL_WIDTH + RADAR_CENTER_X_LOCAL)
 #define RADAR_CENTER_Y (SCREEN_HEIGHT / 2)
 #define RADAR_RADIUS 150
 
@@ -45,6 +47,8 @@
 
 // --- Display & Rotary Objects ---
 TFT_eSPI tft = TFT_eSPI();
+TFT_eSprite infoSprite = TFT_eSprite(&tft);
+TFT_eSprite radarSprite = TFT_eSprite(&tft);
 
 static const uint16_t COLOR_PANEL_BG = 0x1106;
 static const uint16_t COLOR_MODE_ACTIVE = 0x0640;
@@ -128,9 +132,9 @@ void saveSettings();
 void loadSettings();
 void fetchAircraft();
 void drawRadarScreen();
-void drawControlItem(const char *label, const String &value, bool active, int &y);
-void drawStatusIndicators();
-void drawRadarGrid();
+void drawControlItem(TFT_eSprite &canvas, const char *label, const String &value, bool active, int &y);
+void drawStatusIndicators(TFT_eSprite &canvas);
+void drawRadarGrid(TFT_eSprite &canvas);
 void fetchDataTask(void *pvParameters);
 void encoderTask(void *pvParameters);
 void Poweroff(String powermessage);
@@ -140,7 +144,7 @@ void playBeep(int freq, int duration_ms);
 void playSiren(int startFreq, int endFreq, int duration_ms);
 int getBeepFrequencyForAltitude(int altitude);
 double deg2rad(double deg);
-void drawDottedCircle(int16_t x0, int16_t y0, int16_t r, uint16_t color);
+void drawDottedCircle(TFT_eSprite &canvas, int16_t x0, int16_t y0, int16_t r, uint16_t color);
 
 // --- BEEP FREQUENCY BANDS ---
 #define ALT_LOW_FEET 10000
@@ -207,6 +211,11 @@ void setup() {
   tft.println("Multi-Target Radar");
   tft.setCursor(16, 64);
   tft.println("Connecting WiFi...");
+
+  infoSprite.setColorDepth(16);
+  infoSprite.createSprite(INFO_PANEL_WIDTH, SCREEN_HEIGHT);
+  radarSprite.setColorDepth(16);
+  radarSprite.createSprite(RADAR_AREA_WIDTH, SCREEN_HEIGHT);
   
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   unsigned long wifiStart = millis();
@@ -347,7 +356,7 @@ void loop() {
         double realDistance = trackedAircraft[i].distanceKm;
         float ratio = radarRangeKm > 0 ? std::min<float>(static_cast<float>(realDistance / radarRangeKm), 1.0f) : 0.0f;
         float screenRadius = ratio * RADAR_RADIUS;
-        int16_t newBlipX = RADAR_CENTER_X + screenRadius * sin(angleRad);
+        int16_t newBlipX = RADAR_CENTER_X_LOCAL + screenRadius * sin(angleRad);
         int16_t newBlipY = RADAR_CENTER_Y - screenRadius * cos(angleRad);
         activeBlips.push_back({newBlipX, newBlipY, BLIP_LIFESPAN_FRAMES, trackedAircraft[i].isInbound});
         if (activeBlips.size() > MAX_BLIPS) {
@@ -434,25 +443,25 @@ void loadSettings() {
   Serial.printf("Loaded Alert Dist: %.1f km\n", inboundAlertDistanceKm);
 }
 
-void drawControlItem(const char *label, const String &value, bool active, int &y) {
+void drawControlItem(TFT_eSprite &canvas, const char *label, const String &value, bool active, int &y) {
   const int boxHeight = 28;
   const int boxX = 8;
   const int boxWidth = INFO_PANEL_WIDTH - 16;
   uint16_t bg = active ? COLOR_MODE_ACTIVE : COLOR_PANEL_BG;
   uint16_t fg = active ? TFT_BLACK : COLOR_TEXT;
-  tft.fillRect(boxX, y, boxWidth, boxHeight, bg);
-  tft.setTextSize(2);
-  tft.setTextColor(fg, bg);
-  tft.setCursor(boxX + 6, y + 6);
-  tft.print(label);
-  tft.print(": ");
-  tft.print(value);
+  canvas.fillRect(boxX, y, boxWidth, boxHeight, bg);
+  canvas.setTextSize(2);
+  canvas.setTextColor(fg, bg);
+  canvas.setCursor(boxX + 6, y + 6);
+  canvas.print(label);
+  canvas.print(": ");
+  canvas.print(value);
   y += boxHeight + 4;
-  tft.setTextColor(COLOR_TEXT, COLOR_PANEL_BG);
+  canvas.setTextColor(COLOR_TEXT, COLOR_PANEL_BG);
 }
 
-void drawStatusIndicators() {
-  const int baseX = SCREEN_WIDTH - 52;
+void drawStatusIndicators(TFT_eSprite &canvas) {
+  const int baseX = RADAR_AREA_WIDTH - 52;
   const int baseY = 44;
   const int barWidth = 6;
   const int barSpacing = 4;
@@ -473,35 +482,35 @@ void drawStatusIndicators() {
     int x = baseX + i * (barWidth + barSpacing);
     int y = baseY - height;
     if (i < bars) {
-      tft.fillRect(x, y, barWidth, height, COLOR_TEXT);
+      canvas.fillRect(x, y, barWidth, height, COLOR_TEXT);
     } else {
-      tft.drawRect(x, y, barWidth, height, COLOR_TEXT);
+      canvas.drawRect(x, y, barWidth, height, COLOR_TEXT);
     }
   }
 
   int dotX = baseX - 16;
   int dotY = baseY - 10;
   if (dataConnectionOk) {
-    tft.fillCircle(dotX, dotY, 6, COLOR_SWEEP);
+    canvas.fillCircle(dotX, dotY, 6, COLOR_SWEEP);
   } else {
-    tft.drawCircle(dotX, dotY, 6, COLOR_TEXT);
-    tft.drawLine(dotX - 4, dotY - 4, dotX + 4, dotY + 4, COLOR_TEXT);
-    tft.drawLine(dotX - 4, dotY + 4, dotX + 4, dotY - 4, COLOR_TEXT);
+    canvas.drawCircle(dotX, dotY, 6, COLOR_TEXT);
+    canvas.drawLine(dotX - 4, dotY - 4, dotX + 4, dotY + 4, COLOR_TEXT);
+    canvas.drawLine(dotX - 4, dotY + 4, dotX + 4, dotY - 4, COLOR_TEXT);
   }
 }
 
-void drawRadarGrid() {
-  tft.drawCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS, COLOR_GRID);
-  drawDottedCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS * 2 / 3, COLOR_GRID);
-  drawDottedCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS / 3, COLOR_GRID);
-  tft.drawLine(RADAR_CENTER_X - RADAR_RADIUS, RADAR_CENTER_Y, RADAR_CENTER_X + RADAR_RADIUS, RADAR_CENTER_Y, COLOR_GRID);
-  tft.drawLine(RADAR_CENTER_X, RADAR_CENTER_Y - RADAR_RADIUS, RADAR_CENTER_X, RADAR_CENTER_Y + RADAR_RADIUS, COLOR_GRID);
+void drawRadarGrid(TFT_eSprite &canvas) {
+  canvas.drawCircle(RADAR_CENTER_X_LOCAL, RADAR_CENTER_Y, RADAR_RADIUS, COLOR_GRID);
+  drawDottedCircle(canvas, RADAR_CENTER_X_LOCAL, RADAR_CENTER_Y, RADAR_RADIUS * 2 / 3, COLOR_GRID);
+  drawDottedCircle(canvas, RADAR_CENTER_X_LOCAL, RADAR_CENTER_Y, RADAR_RADIUS / 3, COLOR_GRID);
+  canvas.drawLine(RADAR_CENTER_X_LOCAL - RADAR_RADIUS, RADAR_CENTER_Y, RADAR_CENTER_X_LOCAL + RADAR_RADIUS, RADAR_CENTER_Y, COLOR_GRID);
+  canvas.drawLine(RADAR_CENTER_X_LOCAL, RADAR_CENTER_Y - RADAR_RADIUS, RADAR_CENTER_X_LOCAL, RADAR_CENTER_Y + RADAR_RADIUS, COLOR_GRID);
 
   static const char compassLetters[] = {'N', 'E', 'S', 'W'};
-  tft.setTextColor(COLOR_TEXT, COLOR_RADAR_BG);
-  tft.setTextSize(2);
-  tft.setCursor(RADAR_CENTER_X - 10, RADAR_CENTER_Y - RADAR_RADIUS - 24);
-  tft.print(compassLetters[compassIndex]);
+  canvas.setTextColor(COLOR_TEXT, COLOR_RADAR_BG);
+  canvas.setTextSize(2);
+  canvas.setCursor(RADAR_CENTER_X_LOCAL - 10, RADAR_CENTER_Y - RADAR_RADIUS - 24);
+  canvas.print(compassLetters[compassIndex]);
 }
 
 void drawRadarScreen() {
@@ -515,93 +524,93 @@ void drawRadarScreen() {
   currentClosestInbound = closestInboundAircraft;
   xSemaphoreGive(dataMutex);
 
-  tft.fillRect(0, 0, INFO_PANEL_WIDTH, SCREEN_HEIGHT, COLOR_PANEL_BG);
-  tft.fillRect(INFO_PANEL_WIDTH, 0, SCREEN_WIDTH - INFO_PANEL_WIDTH, SCREEN_HEIGHT, COLOR_RADAR_BG);
+  infoSprite.fillSprite(COLOR_PANEL_BG);
+  radarSprite.fillSprite(COLOR_RADAR_BG);
 
   int panelY = 8;
-  drawControlItem("VOL", String(beepVolume), currentMode == VOLUME, panelY);
-  drawControlItem("SPD", String((int)sweepSpeed), currentMode == SPEED, panelY);
-  drawControlItem("ALR", String((int)inboundAlertDistanceKm) + "km", currentMode == ALERT, panelY);
-  drawControlItem("HDG", String((int)radarOrientation), currentMode == RADAR, panelY);
-  drawControlItem("RNG", String((int)radarRangeKm) + "km", false, panelY);
+  drawControlItem(infoSprite, "VOL", String(beepVolume), currentMode == VOLUME, panelY);
+  drawControlItem(infoSprite, "SPD", String((int)sweepSpeed), currentMode == SPEED, panelY);
+  drawControlItem(infoSprite, "ALR", String((int)inboundAlertDistanceKm) + "km", currentMode == ALERT, panelY);
+  drawControlItem(infoSprite, "HDG", String((int)radarOrientation), currentMode == RADAR, panelY);
+  drawControlItem(infoSprite, "RNG", String((int)radarRangeKm) + "km", false, panelY);
 
   int infoY = panelY + 4;
-  tft.setTextColor(COLOR_TEXT, COLOR_PANEL_BG);
-  tft.setTextSize(2);
+  infoSprite.setTextColor(COLOR_TEXT, COLOR_PANEL_BG);
+  infoSprite.setTextSize(2);
 
   if (currentAircraftToDisplay.isValid) {
     const char *flight = strlen(currentAircraftToDisplay.flight) > 0 ? currentAircraftToDisplay.flight : "------";
-    tft.setCursor(12, infoY);
-    tft.print("Flight: ");
-    tft.println(flight);
+    infoSprite.setCursor(12, infoY);
+    infoSprite.print("Flight: ");
+    infoSprite.println(flight);
     infoY += 24;
-    tft.setCursor(12, infoY);
-    tft.print("Dist: ");
-    tft.print(currentAircraftToDisplay.distanceKm, 1);
-    tft.println(" km");
+    infoSprite.setCursor(12, infoY);
+    infoSprite.print("Dist: ");
+    infoSprite.print(currentAircraftToDisplay.distanceKm, 1);
+    infoSprite.println(" km");
     infoY += 24;
-    tft.setCursor(12, infoY);
-    tft.print("Bear: ");
-    tft.print(currentAircraftToDisplay.bearing, 0);
-    tft.println(" deg");
+    infoSprite.setCursor(12, infoY);
+    infoSprite.print("Bear: ");
+    infoSprite.print(currentAircraftToDisplay.bearing, 0);
+    infoSprite.println(" deg");
     infoY += 24;
-    tft.setCursor(12, infoY);
-    tft.print("Alt: ");
+    infoSprite.setCursor(12, infoY);
+    infoSprite.print("Alt: ");
     if (currentAircraftToDisplay.altitude >= 0) {
-      tft.print(currentAircraftToDisplay.altitude);
-      tft.println(" ft");
+      infoSprite.print(currentAircraftToDisplay.altitude);
+      infoSprite.println(" ft");
     } else {
-      tft.println("---");
+      infoSprite.println("---");
     }
     infoY += 24;
-    tft.setCursor(12, infoY);
-    tft.print("Speed: ");
+    infoSprite.setCursor(12, infoY);
+    infoSprite.print("Speed: ");
     if (currentAircraftToDisplay.groundSpeed >= 0) {
-      tft.print(currentAircraftToDisplay.groundSpeed, 0);
-      tft.println(" kt");
+      infoSprite.print(currentAircraftToDisplay.groundSpeed, 0);
+      infoSprite.println(" kt");
     } else {
-      tft.println("---");
+      infoSprite.println("---");
     }
   } else {
-    tft.setCursor(12, infoY);
-    tft.println("Scanning...");
+    infoSprite.setCursor(12, infoY);
+    infoSprite.println("Scanning...");
     infoY += 24;
-    tft.setCursor(12, infoY);
-    tft.print("Range: ");
-    tft.print(radarRangeKm, 0);
-    tft.println(" km");
+    infoSprite.setCursor(12, infoY);
+    infoSprite.print("Range: ");
+    infoSprite.print(radarRangeKm, 0);
+    infoSprite.println(" km");
   }
 
   int inboundY = SCREEN_HEIGHT - 56;
   if (currentClosestInbound.isInbound && currentClosestInbound.minutesToClosest >= 0) {
-    tft.setTextColor(COLOR_BLIP_INBOUND, COLOR_PANEL_BG);
-    tft.setCursor(12, inboundY - 4);
-    tft.print("Inbound: ");
-    tft.println(strlen(currentClosestInbound.flight) > 0 ? currentClosestInbound.flight : "------");
-    tft.setCursor(12, inboundY + 20);
-    tft.print("ETA: ");
-    tft.print(currentClosestInbound.minutesToClosest, 1);
-    tft.println(" min");
-    tft.setTextColor(COLOR_TEXT, COLOR_PANEL_BG);
+    infoSprite.setTextColor(COLOR_BLIP_INBOUND, COLOR_PANEL_BG);
+    infoSprite.setCursor(12, inboundY - 4);
+    infoSprite.print("Inbound: ");
+    infoSprite.println(strlen(currentClosestInbound.flight) > 0 ? currentClosestInbound.flight : "------");
+    infoSprite.setCursor(12, inboundY + 20);
+    infoSprite.print("ETA: ");
+    infoSprite.print(currentClosestInbound.minutesToClosest, 1);
+    infoSprite.println(" min");
+    infoSprite.setTextColor(COLOR_TEXT, COLOR_PANEL_BG);
   } else {
-    tft.setTextColor(COLOR_TEXT, COLOR_PANEL_BG);
-    tft.setCursor(12, inboundY + 8);
-    tft.println("No inbound alert");
+    infoSprite.setTextColor(COLOR_TEXT, COLOR_PANEL_BG);
+    infoSprite.setCursor(12, inboundY + 8);
+    infoSprite.println("No inbound alert");
   }
 
-  tft.setTextSize(2);
-  tft.setTextColor(COLOR_TEXT, COLOR_RADAR_BG);
-  tft.setCursor(INFO_PANEL_WIDTH + 12, 12);
-  tft.print("Range: ");
-  tft.print(radarRangeKm, 0);
-  tft.println(" km");
-  tft.setCursor(INFO_PANEL_WIDTH + 12, 36);
-  tft.print("Heading: ");
-  tft.print(radarOrientation, 0);
-  tft.println(" deg");
+  radarSprite.setTextSize(2);
+  radarSprite.setTextColor(COLOR_TEXT, COLOR_RADAR_BG);
+  radarSprite.setCursor(12, 12);
+  radarSprite.print("Range: ");
+  radarSprite.print(radarRangeKm, 0);
+  radarSprite.println(" km");
+  radarSprite.setCursor(12, 36);
+  radarSprite.print("Heading: ");
+  radarSprite.print(radarOrientation, 0);
+  radarSprite.println(" deg");
 
-  drawRadarGrid();
-  drawStatusIndicators();
+  drawRadarGrid(radarSprite);
+  drawStatusIndicators(radarSprite);
 
   unsigned long flashPhase = millis() / 200;
   for (const auto &blip : currentBlips) {
@@ -617,13 +626,16 @@ void drawRadarScreen() {
     } else {
       radius = 2;
     }
-    tft.fillCircle(blip.x, blip.y, radius, color);
+    radarSprite.fillCircle(blip.x, blip.y, radius, color);
   }
 
   double sweepRad = sweepAngle * PI / 180.0;
-  int16_t sweepX = RADAR_CENTER_X + (RADAR_RADIUS - 2) * sin(sweepRad);
+  int16_t sweepX = RADAR_CENTER_X_LOCAL + (RADAR_RADIUS - 2) * sin(sweepRad);
   int16_t sweepY = RADAR_CENTER_Y - (RADAR_RADIUS - 2) * cos(sweepRad);
-  tft.drawLine(RADAR_CENTER_X, RADAR_CENTER_Y, sweepX, sweepY, COLOR_SWEEP);
+  radarSprite.drawLine(RADAR_CENTER_X_LOCAL, RADAR_CENTER_Y, sweepX, sweepY, COLOR_SWEEP);
+
+  infoSprite.pushSprite(0, 0);
+  radarSprite.pushSprite(INFO_PANEL_WIDTH, 0);
 }
 
 void fetchAircraft() {
@@ -805,12 +817,12 @@ double calculateBearing(double lat1, double lon1, double lat2, double lon2) {
 }
 
 // Custom function to draw a dotted circle
-void drawDottedCircle(int16_t x0, int16_t y0, int16_t r, uint16_t color) {
+void drawDottedCircle(TFT_eSprite &canvas, int16_t x0, int16_t y0, int16_t r, uint16_t color) {
   const int step = 12;
   for (int angle = 0; angle < 360; angle += step) {
     double angleRad = angle * PI / 180.0;
     int16_t x = x0 + r * sin(angleRad);
     int16_t y = y0 - r * cos(angleRad);
-    tft.drawPixel(x, y, color);
+    canvas.drawPixel(x, y, color);
   }
 }
