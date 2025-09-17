@@ -649,8 +649,6 @@ void renderInfoPanel(const PanelSnapshot &snapshot) {
 }
 
 void drawRadarScreen() {
-  tft.dmaWait();
-
   Aircraft currentAircraftToDisplay;
   Aircraft currentClosestInbound;
   std::vector<RadarBlip> currentBlips;
@@ -719,14 +717,11 @@ void drawRadarScreen() {
   int16_t sweepY = RADAR_CENTER_Y - (RADAR_RADIUS - 2) * cos(sweepRad);
   radarSprite.drawLine(RADAR_CENTER_X_LOCAL, RADAR_CENTER_Y, sweepX, sweepY, COLOR_SWEEP);
 
-  tft.startWrite();
   if (panelDirty) {
     infoSprite.pushSprite(0, 0);
     panelDirty = false;
   }
-  tft.pushImageDMA(INFO_PANEL_WIDTH, 0, RADAR_AREA_WIDTH, SCREEN_HEIGHT, (uint16_t *)radarSprite.getPointer());
-  tft.dmaWait();
-  tft.endWrite();
+  radarSprite.pushSprite(INFO_PANEL_WIDTH, 0);
 }
 
 void fetchAircraft() {
