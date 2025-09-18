@@ -11,13 +11,13 @@
 
 // --- Display & Timing Constants ---
 static const uint16_t COLOR_BACKGROUND = TFT_BLACK;
-static const uint16_t COLOR_HEADER = TFT_DARKGREEN;
 static const uint16_t COLOR_TEXT = TFT_WHITE;
-static const int INFO_START_Y = 60;
-static const int INFO_LINE_HEIGHT = 28;
+static const int INFO_START_Y = 58;
+static const int INFO_LINE_HEIGHT = 26;
 static const unsigned long REFRESH_INTERVAL_MS = 5000;
 static const unsigned long WIFI_RETRY_INTERVAL_MS = 15000;
 static const unsigned long WIFI_CONNECT_TIMEOUT_MS = 10000;
+static const double INBOUND_ALERT_DISTANCE_KM = 5.0;
 
 TFT_eSPI tft = TFT_eSPI();
 
@@ -26,14 +26,20 @@ struct AircraftInfo {
   double distanceKm;
   int altitude;
   double bearing;
+  double groundSpeed;
+  double track;
+  double minutesToClosest;
+  bool inbound;
   bool valid;
 };
 
 AircraftInfo closestAircraft;
 int aircraftCount = 0;
+int inboundAircraftCount = 0;
 bool dataConnectionOk = false;
 unsigned long lastFetchTime = 0;
 unsigned long lastWifiAttempt = 0;
+unsigned long lastSuccessfulFetch = 0;
 
 // --- Function Prototypes ---
 void drawStaticLayout();
@@ -45,6 +51,9 @@ void fetchAircraft();
 double haversine(double lat1, double lon1, double lat2, double lon2);
 double calculateBearing(double lat1, double lon1, double lat2, double lon2);
 double deg2rad(double deg);
+String bearingToCardinal(double bearing);
+String formatBearingString(double bearing);
+String formatTimeAgo(unsigned long ms);
 
 void setup() {
   Serial.begin(115200);
@@ -85,10 +94,9 @@ void drawStaticLayout() {
   tft.setTextDatum(TC_DATUM);
   tft.setTextSize(3);
   tft.drawString("Closest Plane Radar", tft.width() / 2, 18);
-  tft.setTextSize(2);
-  tft.setTextColor(COLOR_HEADER, COLOR_BACKGROUND);
-  tft.drawString("Freenove ESP32 CYD", tft.width() / 2, 42);
   tft.setTextColor(COLOR_TEXT, COLOR_BACKGROUND);
+  tft.setTextSize(2);
+  tft.drawString("Live ADS-B Monitor", tft.width() / 2, 44);
   tft.drawFastHLine(0, 54, tft.width(), TFT_DARKGREY);
   tft.setTextDatum(TL_DATUM);
   tft.setTextSize(2);
@@ -102,7 +110,7 @@ void drawInfoLine(int index, const String &text) {
 }
 
 void drawStatusLine(int index, const String &text) {
-  int baseY = tft.height() - 3 * INFO_LINE_HEIGHT;
+  int baseY = tft.height() - 4 * INFO_LINE_HEIGHT;
   int y = baseY + index * INFO_LINE_HEIGHT;
   String content = text.length() ? text : " ";
   tft.setTextPadding(tft.width() - 20);
@@ -115,21 +123,40 @@ void updateDisplay() {
   if (closestAircraft.valid) {
     String flight = closestAircraft.flight.length() ? closestAircraft.flight : String("(unknown)");
     flight.trim();
-    drawInfoLine(0, "Flight: " + flight);
-
-    char distanceBuffer[32];
-    snprintf(distanceBuffer, sizeof(distanceBuffer), "Dist: %.1f km", closestAircraft.distanceKm);
-    drawInfoLine(1, distanceBuffer);
-
-    if (closestAircraft.altitude >= 0) {
-      drawInfoLine(2, "Alt: " + String(closestAircraft.altitude) + " ft");
-    } else {
-      drawInfoLine(2, "Alt: ---");
+    String header = "Flight: " + flight;
+    if (closestAircraft.inbound) {
+      header += "  (INBOUND)";
     }
+    drawInfoLine(0, header);
 
-    char bearingBuffer[32];
-    snprintf(bearingBuffer, sizeof(bearingBuffer), "Bearing: %.0f°", closestAircraft.bearing);
-    drawInfoLine(3, bearingBuffer);
+    String distanceLine = String("Dist: ") + String(closestAircraft.distanceKm, 1) + " km  " +
+                          "Bearing: " + formatBearingString(closestAircraft.bearing);
+    drawInfoLine(1, distanceLine);
+
+    String altitudeLine = "Alt: ";
+    if (closestAircraft.altitude >= 0) {
+      altitudeLine += String(closestAircraft.altitude) + " ft";
+    } else {
+      altitudeLine += "---";
+    }
+    if (!isnan(closestAircraft.groundSpeed) && closestAircraft.groundSpeed >= 0) {
+      altitudeLine += "    Spd: " + String(closestAircraft.groundSpeed, 0) + " kt";
+    }
+    drawInfoLine(2, altitudeLine);
+
+    String statusLine;
+    if (closestAircraft.inbound) {
+      if (!isnan(closestAircraft.minutesToClosest) && closestAircraft.minutesToClosest >= 0) {
+        statusLine = String("Inbound ETA: ") + String(closestAircraft.minutesToClosest, 1) + " min";
+      } else {
+        statusLine = "Inbound: ETA --";
+      }
+    } else if (!isnan(closestAircraft.track)) {
+      statusLine = String("Track: ") + formatBearingString(closestAircraft.track);
+    } else {
+      statusLine = "Track: ---";
+    }
+    drawInfoLine(3, statusLine);
   } else {
     drawInfoLine(0, "No aircraft in range");
     drawInfoLine(1, " ");
@@ -137,16 +164,29 @@ void updateDisplay() {
     drawInfoLine(3, " ");
   }
 
-  drawStatusLine(0, "Seen aircraft: " + String(aircraftCount));
+  String seenLine = "Seen aircraft: " + String(aircraftCount);
+  if (inboundAircraftCount > 0) {
+    seenLine += "  inbound: " + String(inboundAircraftCount);
+  }
+  drawStatusLine(0, seenLine);
 
   if (WiFi.status() == WL_CONNECTED) {
-    IPAddress ip = WiFi.localIP();
-    drawStatusLine(1, "WiFi: connected " + ip.toString());
+    long rssi = WiFi.RSSI();
+    drawStatusLine(1, String("WiFi: connected ") + String(rssi) + " dBm");
   } else {
     drawStatusLine(1, "WiFi: offline");
   }
 
-  drawStatusLine(2, dataConnectionOk ? "Data link: OK" : "Data link: waiting...");
+  String dataLine = String("Data link: ") + (dataConnectionOk ? "OK" : "waiting...");
+  drawStatusLine(2, dataLine);
+
+  String updateLine = "Last update: ";
+  if (lastSuccessfulFetch > 0) {
+    updateLine += formatTimeAgo(millis() - lastSuccessfulFetch);
+  } else {
+    updateLine += "--";
+  }
+  drawStatusLine(3, updateLine);
 
   tft.setTextPadding(0);
 }
@@ -205,7 +245,12 @@ void fetchAircraft() {
       double bestDistance = 1e12;
       AircraftInfo best;
       best.valid = false;
+      best.groundSpeed = NAN;
+      best.track = NAN;
+      best.minutesToClosest = NAN;
+      best.inbound = false;
       aircraftCount = 0;
+      int localInboundCount = 0;
 
       for (JsonObject plane : arr) {
         if (!plane.containsKey("lat") || !plane.containsKey("lon")) {
@@ -221,11 +266,56 @@ void fetchAircraft() {
 
         aircraftCount++;
 
+        double bearingToHome = calculateBearing(USER_LAT, USER_LON, lat, lon);
+        double groundSpeed = NAN;
+        double track = NAN;
+        double minutesToClosest = NAN;
+        bool inbound = false;
+
+        if (plane.containsKey("gs")) {
+          JsonVariant speedVar = plane["gs"];
+          if (speedVar.is<float>() || speedVar.is<double>() || speedVar.is<int>()) {
+            groundSpeed = speedVar.as<double>();
+          }
+        }
+
+        if (plane.containsKey("track")) {
+          JsonVariant trackVar = plane["track"];
+          if (trackVar.is<float>() || trackVar.is<double>() || trackVar.is<int>()) {
+            track = trackVar.as<double>();
+          }
+        }
+
+        if (!isnan(track) && !isnan(groundSpeed) && groundSpeed > 0) {
+          double toBase = fmod(bearingToHome + 180.0, 360.0);
+          double angleDiff = fabs(track - toBase);
+          if (angleDiff > 180.0) {
+            angleDiff = 360.0 - angleDiff;
+          }
+          double crossTrack = distance * sin(deg2rad(angleDiff));
+          double alongTrack = distance * cos(deg2rad(angleDiff));
+          if (angleDiff < 90.0 && fabs(crossTrack) <= INBOUND_ALERT_DISTANCE_KM && alongTrack >= 0) {
+            inbound = true;
+            double speedKmMin = groundSpeed * 1.852 / 60.0;
+            if (speedKmMin > 0) {
+              minutesToClosest = alongTrack / speedKmMin;
+            }
+          }
+        }
+
+        if (inbound) {
+          localInboundCount++;
+        }
+
         if (distance < bestDistance) {
           bestDistance = distance;
           best.valid = true;
           best.distanceKm = distance;
-          best.bearing = calculateBearing(USER_LAT, USER_LON, lat, lon);
+          best.bearing = bearingToHome;
+          best.groundSpeed = groundSpeed;
+          best.track = track;
+          best.minutesToClosest = minutesToClosest;
+          best.inbound = inbound;
 
           if (plane.containsKey("flight")) {
             const char *flightStr = plane["flight"].as<const char*>();
@@ -250,15 +340,21 @@ void fetchAircraft() {
       }
 
       closestAircraft = best;
+      inboundAircraftCount = localInboundCount;
+      if (best.valid) {
+        lastSuccessfulFetch = millis();
+      }
     } else {
       dataConnectionOk = false;
       closestAircraft.valid = false;
       aircraftCount = 0;
+      inboundAircraftCount = 0;
     }
   } else {
     dataConnectionOk = false;
     closestAircraft.valid = false;
     aircraftCount = 0;
+    inboundAircraftCount = 0;
   }
 
   http.end();
@@ -285,4 +381,48 @@ double calculateBearing(double lat1, double lon1, double lat2, double lon2) {
   double bearing = atan2(y, x);
   bearing = fmod((bearing * 180.0 / PI + 360.0), 360.0);
   return bearing;
+}
+
+String bearingToCardinal(double bearing) {
+  if (isnan(bearing)) {
+    return String("---");
+  }
+  static const char *directions[] = {
+    "N", "NNE", "NE", "ENE",
+    "E", "ESE", "SE", "SSE",
+    "S", "SSW", "SW", "WSW",
+    "W", "WNW", "NW", "NNW"
+  };
+  double normalized = fmod(bearing + 360.0, 360.0);
+  int index = (int)round(normalized / 22.5) % 16;
+  return String(directions[index]);
+}
+
+String formatBearingString(double bearing) {
+  if (isnan(bearing)) {
+    return String("---");
+  }
+  double normalized = fmod(bearing + 360.0, 360.0);
+  char buffer[24];
+  snprintf(buffer, sizeof(buffer), "%.0f°", normalized);
+  return String(buffer) + " (" + bearingToCardinal(normalized) + ")";
+}
+
+String formatTimeAgo(unsigned long ms) {
+  unsigned long seconds = ms / 1000;
+  if (seconds < 60) {
+    return String(seconds) + "s ago";
+  }
+  unsigned long minutes = seconds / 60;
+  seconds %= 60;
+  if (minutes < 60) {
+    char buffer[24];
+    snprintf(buffer, sizeof(buffer), "%lum %02lus ago", minutes, seconds);
+    return String(buffer);
+  }
+  unsigned long hours = minutes / 60;
+  minutes %= 60;
+  char buffer[24];
+  snprintf(buffer, sizeof(buffer), "%luh %02lum ago", hours, minutes);
+  return String(buffer);
 }
