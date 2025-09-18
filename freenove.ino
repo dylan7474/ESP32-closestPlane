@@ -21,8 +21,10 @@ static const unsigned long REFRESH_INTERVAL_MS = 5000;
 static const unsigned long WIFI_RETRY_INTERVAL_MS = 15000;
 static const unsigned long WIFI_CONNECT_TIMEOUT_MS = 10000;
 static const double INBOUND_ALERT_DISTANCE_KM = 5.0;
-static const int RADAR_RADIUS = 72;
 static const int RADAR_MARGIN = 12;
+static const int RADAR_DESIRED_RADIUS = 96;
+static const int RADAR_MIN_RADIUS = 60;
+static const int RADAR_HEADER_CLEARANCE = 48;
 static const double RADAR_RANGE_KM = 25.0;
 static const int MAX_RADAR_CONTACTS = 12;
 
@@ -52,6 +54,8 @@ struct RadarContact {
   double distanceKm;
   double bearing;
   bool inbound;
+  bool closest;
+  String ident;
   bool valid;
 };
 
@@ -64,6 +68,7 @@ void updateDisplay();
 void drawInfoLine(int index, const String &text);
 void drawStatusLine(int index, const String &text);
 void drawRadar();
+void drawRadarBackground(int centerX, int centerY, int radius);
 void connectWiFi();
 void fetchAircraft();
 double haversine(double lat1, double lon1, double lat2, double lon2);
@@ -72,6 +77,8 @@ double deg2rad(double deg);
 String bearingToCardinal(double bearing);
 String formatBearingString(double bearing);
 String formatTimeAgo(unsigned long ms);
+String selectFlightIdent(const JsonObject &plane);
+String formatDistanceLabel(double distanceKm);
 
 void setup() {
   Serial.begin(115200);
@@ -212,14 +219,44 @@ void updateDisplay() {
 }
 
 void drawRadar() {
-  int centerX = tft.width() - RADAR_MARGIN - RADAR_RADIUS;
-  int centerY = tft.height() - RADAR_MARGIN - RADAR_RADIUS;
+  int maxRadiusByWidth = (tft.width() - RADAR_MARGIN) / 2;
+  int maxRadiusByHeight = (tft.height() - RADAR_MARGIN - RADAR_HEADER_CLEARANCE) / 2;
+  int radarRadius = RADAR_DESIRED_RADIUS;
+  if (radarRadius > maxRadiusByWidth) {
+    radarRadius = maxRadiusByWidth;
+  }
+  if (radarRadius > maxRadiusByHeight) {
+    radarRadius = maxRadiusByHeight;
+  }
+  if (radarRadius < RADAR_MIN_RADIUS) {
+    radarRadius = RADAR_MIN_RADIUS;
+  }
 
-  tft.fillCircle(centerX, centerY, RADAR_RADIUS, COLOR_BACKGROUND);
-  tft.drawCircle(centerX, centerY, RADAR_RADIUS, COLOR_RADAR_OUTLINE);
-  tft.drawCircle(centerX, centerY, RADAR_RADIUS / 2, COLOR_RADAR_OUTLINE);
-  tft.drawLine(centerX - RADAR_RADIUS, centerY, centerX + RADAR_RADIUS, centerY, COLOR_RADAR_OUTLINE);
-  tft.drawLine(centerX, centerY - RADAR_RADIUS, centerX, centerY + RADAR_RADIUS, COLOR_RADAR_OUTLINE);
+  int centerX = tft.width() - RADAR_MARGIN - radarRadius;
+  int centerY = tft.height() - RADAR_MARGIN - radarRadius;
+
+  int radarAreaLeft = centerX - radarRadius - 6;
+  if (radarAreaLeft < 0) {
+    radarAreaLeft = 0;
+  }
+  int radarAreaTop = centerY - radarRadius - 6;
+  if (radarAreaTop < 0) {
+    radarAreaTop = 0;
+  }
+  int radarAreaSize = (radarRadius + 6) * 2;
+  if (radarAreaLeft + radarAreaSize > tft.width()) {
+    radarAreaSize = tft.width() - radarAreaLeft;
+  }
+  int radarAreaHeight = (radarRadius + 6) * 2;
+  if (radarAreaTop + radarAreaHeight > tft.height()) {
+    radarAreaHeight = tft.height() - radarAreaTop;
+  }
+  tft.fillRect(radarAreaLeft, radarAreaTop, radarAreaSize, radarAreaHeight, COLOR_BACKGROUND);
+
+  drawRadarBackground(centerX, centerY, radarRadius);
+
+  tft.setTextSize(1);
+  tft.setTextDatum(TL_DATUM);
 
   for (int i = 0; i < radarContactCount; ++i) {
     const RadarContact &contact = radarContacts[i];
@@ -233,14 +270,70 @@ void drawRadar() {
     }
 
     double bearingRad = deg2rad(contact.bearing);
-    int x = centerX + int(sin(bearingRad) * RADAR_RADIUS * normalized);
-    int y = centerY - int(cos(bearingRad) * RADAR_RADIUS * normalized);
+    int x = centerX + int(sin(bearingRad) * radarRadius * normalized);
+    int y = centerY - int(cos(bearingRad) * radarRadius * normalized);
 
-    uint16_t dotColor = contact.inbound ? TFT_RED : TFT_CYAN;
-    int dotSize = contact.inbound ? 4 : 3;
+    uint16_t dotColor = contact.closest ? TFT_YELLOW : (contact.inbound ? TFT_RED : TFT_CYAN);
+    int dotSize = contact.closest ? 5 : (contact.inbound ? 4 : 3);
     tft.fillCircle(x, y, dotSize, dotColor);
+
     tft.drawPixel(x, y, TFT_WHITE);
+
+    String rangeLabel = formatDistanceLabel(contact.distanceKm);
+    String label = contact.ident.length() ? contact.ident : rangeLabel;
+    if (contact.ident.length() == 0) {
+      rangeLabel = formatBearingString(contact.bearing);
+    }
+    int textWidth = tft.textWidth(label);
+    int textHeight = 8;
+
+    int labelX = x;
+    int labelY = y;
+    if (x < centerX) {
+      labelX -= textWidth + 6;
+    } else {
+      labelX += 6;
+    }
+    if (y < centerY) {
+      labelY -= textHeight + 4;
+    } else {
+      labelY += 4;
+    }
+
+    tft.setTextColor(TFT_WHITE, COLOR_BACKGROUND);
+    tft.drawString(label, labelX, labelY);
+    tft.setTextColor(TFT_LIGHTGREY, COLOR_BACKGROUND);
+    tft.drawString(rangeLabel, labelX, labelY + textHeight);
   }
+
+  tft.setTextSize(2);
+  tft.setTextColor(COLOR_TEXT, COLOR_BACKGROUND);
+}
+
+void drawRadarBackground(int centerX, int centerY, int radius) {
+  tft.drawCircle(centerX, centerY, radius, COLOR_RADAR_OUTLINE);
+  tft.drawCircle(centerX, centerY, radius * 2 / 3, COLOR_RADAR_OUTLINE);
+  tft.drawCircle(centerX, centerY, radius / 3, COLOR_RADAR_OUTLINE);
+  tft.drawLine(centerX - radius, centerY, centerX + radius, centerY, COLOR_RADAR_OUTLINE);
+  tft.drawLine(centerX, centerY - radius, centerX, centerY + radius, COLOR_RADAR_OUTLINE);
+
+  double ringStep = RADAR_RANGE_KM / 3.0;
+  for (int ring = 1; ring <= 3; ++ring) {
+    double km = ringStep * ring;
+    int labelY = centerY - radius + (radius * ring * 2) / 3;
+    tft.setTextSize(1);
+    tft.setTextColor(TFT_DARKGREY, COLOR_BACKGROUND);
+    String label = formatDistanceLabel(km);
+    int textWidth = tft.textWidth(label);
+    tft.drawString(label, centerX - textWidth / 2, labelY - 4);
+  }
+
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_DARKGREY, COLOR_BACKGROUND);
+  tft.drawString("N", centerX - 3, centerY - radius - 10);
+  tft.drawString("S", centerX - 3, centerY + radius + 2);
+  tft.drawString("W", centerX - radius - 12, centerY - 3);
+  tft.drawString("E", centerX + radius + 4, centerY - 3);
 }
 
 void connectWiFi() {
@@ -308,6 +401,8 @@ void fetchAircraft() {
       radarContactCount = 0;
       for (int i = 0; i < MAX_RADAR_CONTACTS; ++i) {
         radarContacts[i].valid = false;
+        radarContacts[i].closest = false;
+        radarContacts[i].ident = "";
       }
 
       for (JsonObject plane : arr) {
@@ -371,6 +466,8 @@ void fetchAircraft() {
           slot.bearing = bearingToHome;
           slot.inbound = inbound;
           slot.valid = true;
+          slot.closest = false;
+          slot.ident = selectFlightIdent(plane);
         }
 
         if (distance < bestDistance) {
@@ -383,12 +480,7 @@ void fetchAircraft() {
           best.minutesToClosest = minutesToClosest;
           best.inbound = inbound;
 
-          if (plane.containsKey("flight")) {
-            const char *flightStr = plane["flight"].as<const char*>();
-            best.flight = flightStr ? String(flightStr) : String();
-          } else {
-            best.flight = "";
-          }
+          best.flight = selectFlightIdent(plane);
 
           if (plane.containsKey("alt_baro")) {
             JsonVariant alt = plane["alt_baro"];
@@ -409,6 +501,20 @@ void fetchAircraft() {
       inboundAircraftCount = localInboundCount;
       if (best.valid) {
         lastSuccessfulFetch = millis();
+        for (int i = 0; i < radarContactCount; ++i) {
+          RadarContact &contact = radarContacts[i];
+          if (!contact.valid) {
+            continue;
+          }
+          bool sameFlight = false;
+          if (best.flight.length() && contact.ident.length()) {
+            sameFlight = contact.ident == best.flight;
+          }
+          bool closeByPosition = fabs(contact.distanceKm - best.distanceKm) < 0.25 && fabs(contact.bearing - best.bearing) < 2.0;
+          if (sameFlight || closeByPosition) {
+            contact.closest = true;
+          }
+        }
       }
     } else {
       dataConnectionOk = false;
@@ -493,5 +599,64 @@ String formatTimeAgo(unsigned long ms) {
   char buffer[24];
   snprintf(buffer, sizeof(buffer), "%luh %02lum ago", hours, minutes);
   return String(buffer);
+}
+
+String selectFlightIdent(const JsonObject &plane) {
+  if (plane.containsKey("flight")) {
+    const char *flightStr = plane["flight"].as<const char*>();
+    if (flightStr) {
+      String trimmed = String(flightStr);
+      trimmed.trim();
+      if (trimmed.length()) {
+        return trimmed;
+      }
+    }
+  }
+
+  if (plane.containsKey("registration")) {
+    const char *regStr = plane["registration"].as<const char*>();
+    if (regStr) {
+      String reg = String(regStr);
+      reg.trim();
+      if (reg.length()) {
+        return reg;
+      }
+    }
+  }
+
+  if (plane.containsKey("hex")) {
+    const char *hex = plane["hex"].as<const char*>();
+    if (hex) {
+      return String(hex);
+    }
+  }
+
+  if (plane.containsKey("icao24")) {
+    const char *icao = plane["icao24"].as<const char*>();
+    if (icao) {
+      return String(icao);
+    }
+  }
+
+  return String();
+}
+
+String formatDistanceLabel(double distanceKm) {
+  if (isnan(distanceKm) || distanceKm < 0) {
+    return String("--");
+  }
+
+  double displayValue = distanceKm;
+  int decimals = 1;
+  if (displayValue >= 20.0) {
+    decimals = 0;
+  }
+
+  char buffer[16];
+  dtostrf(displayValue, 0, decimals, buffer);
+  String label(buffer);
+  label.trim();
+  label += " km";
+  return label;
 }
 #endif  // defined(USE_FREENOVE_SKETCH) && USE_FREENOVE_SKETCH
