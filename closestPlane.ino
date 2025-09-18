@@ -18,6 +18,8 @@
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define REFRESH_INTERVAL_MS 5000
+// Minimum time between OLED refreshes to prevent visible flashing
+#define RENDER_INTERVAL_MS 50
 #define WIFI_CONNECT_TIMEOUT_MS 10000
 
 // --- Radar Constants ---
@@ -27,9 +29,9 @@
 #define RADAR_CENTER_X 96
 #define RADAR_CENTER_Y 36
 #define RADAR_RADIUS 27
-#define MINI_RADAR_CENTER_X 24
-#define MINI_RADAR_CENTER_Y 48
-#define MINI_RADAR_RADIUS 12
+const int16_t MINI_RADAR_CENTER_X = 24;
+const int16_t MINI_RADAR_CENTER_Y = 48;
+const int16_t MINI_RADAR_RADIUS = 12;
 
 // --- EEPROM Constants ---
 #define EEPROM_SIZE 64
@@ -112,6 +114,7 @@ float sweepAngle = 0.0;
 float lastSweepAngle = 0.0;
 std::vector<bool> paintedThisTurn;
 unsigned long lastFrameTime = 0;
+unsigned long lastRenderTime = 0;
 
 // --- Function Prototypes ---
 void saveSettings();
@@ -338,7 +341,10 @@ void loop() {
   }
   xSemaphoreGive(dataMutex);
 
-  drawRadarScreen();
+  if (currentTime - lastRenderTime >= RENDER_INTERVAL_MS) {
+    drawRadarScreen();
+    lastRenderTime = currentTime;
+  }
   lastFrameTime = currentTime;
 }
 
