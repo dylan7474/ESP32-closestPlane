@@ -1,3 +1,5 @@
+#if !defined(USE_FREENOVE_SKETCH) || !(USE_FREENOVE_SKETCH)
+
 #include <SimpleRotary.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
@@ -727,3 +729,4 @@ void drawDottedCircle(int16_t x0, int16_t y0, int16_t r, uint16_t color) {
   }
 }
 
+#endif  // !defined(USE_FREENOVE_SKETCH) || !(USE_FREENOVE_SKETCH)

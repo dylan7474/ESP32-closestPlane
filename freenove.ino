@@ -1,3 +1,5 @@
+#if defined(USE_FREENOVE_SKETCH) && USE_FREENOVE_SKETCH
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
@@ -492,3 +494,4 @@ String formatTimeAgo(unsigned long ms) {
   snprintf(buffer, sizeof(buffer), "%luh %02lum ago", hours, minutes);
   return String(buffer);
 }
+#endif  // defined(USE_FREENOVE_SKETCH) && USE_FREENOVE_SKETCH
