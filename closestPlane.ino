@@ -27,6 +27,9 @@
 #define RADAR_CENTER_X 96
 #define RADAR_CENTER_Y 36
 #define RADAR_RADIUS 27
+#define MINI_RADAR_CENTER_X 24
+#define MINI_RADAR_CENTER_Y 48
+#define MINI_RADAR_RADIUS 12
 
 // --- EEPROM Constants ---
 #define EEPROM_SIZE 64
@@ -510,6 +513,7 @@ void drawRadarScreen() {
   }
 
   display.drawCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS, SH110X_WHITE);
+  display.drawCircle(MINI_RADAR_CENTER_X, MINI_RADAR_CENTER_Y, MINI_RADAR_RADIUS, SH110X_WHITE);
   display.setCursor(RADAR_CENTER_X - 3, RADAR_CENTER_Y - RADAR_RADIUS - 9);
   if (currentMode == RADAR) display.setTextColor(SH110X_BLACK, SH110X_WHITE);
   const char compassLetters[] = {'N','E','S','W'};
