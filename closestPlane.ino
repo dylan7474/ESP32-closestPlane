@@ -19,7 +19,7 @@
 #define SCREEN_HEIGHT 64
 #define REFRESH_INTERVAL_MS 5000
 // Minimum time between OLED refreshes to prevent visible flashing
-#define RENDER_INTERVAL_MS 50
+#define RENDER_INTERVAL_MS 75
 #define WIFI_CONNECT_TIMEOUT_MS 10000
 
 // --- Radar Constants ---
@@ -46,6 +46,7 @@ const int16_t MINI_RADAR_RADIUS = 12;
 
 // --- Display & Rotary Objects ---
 Adafruit_SH1106G display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+GFXcanvas1 radarCanvas(SCREEN_WIDTH, SCREEN_HEIGHT);
 // Rotary wired as "volume" now adjusts radar range (switch still powers off)
 SimpleRotary VolumeSelector(33, 4, 23);
 // Rotary wired as "channel" now controls volume/speed/alert/compass (switch still cycles modes)
@@ -197,6 +198,10 @@ void setup() {
   display.setCursor(0, 16);
   display.println("Connecting WiFi...");
   display.display();
+
+  radarCanvas.setTextWrap(false);
+  radarCanvas.setTextSize(1);
+  radarCanvas.setTextColor(SH110X_WHITE);
   
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   unsigned long wifiStart = millis();
@@ -409,80 +414,79 @@ void loadSettings() {
 }
 
 void drawRadarScreen() {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SH110X_WHITE);
+  radarCanvas.fillScreen(SH110X_BLACK);
+  radarCanvas.setTextSize(1);
+  radarCanvas.setTextColor(SH110X_WHITE);
 
   // Settings summary row
-  display.setCursor(0, 0);
-  if (currentMode == VOLUME) display.setTextColor(SH110X_BLACK, SH110X_WHITE);
-  display.print("V");
-  display.setTextColor(SH110X_WHITE);
-  display.print(":");
-  display.print(beepVolume);
-  display.print(" ");
-  if (currentMode == SPEED) display.setTextColor(SH110X_BLACK, SH110X_WHITE);
-  display.print("S");
-  display.setTextColor(SH110X_WHITE);
-  display.print(":");
-  display.print(sweepSpeed, 0);
-  display.print(" ");
-  if (currentMode == ALERT) display.setTextColor(SH110X_BLACK, SH110X_WHITE);
-  display.print("P");
-  display.setTextColor(SH110X_WHITE);
-  display.print(":");
-  display.print(inboundAlertDistanceKm, 0);
-  display.print("k");
+  radarCanvas.setCursor(0, 0);
+  if (currentMode == VOLUME) radarCanvas.setTextColor(SH110X_BLACK, SH110X_WHITE);
+  radarCanvas.print("V");
+  radarCanvas.setTextColor(SH110X_WHITE);
+  radarCanvas.print(":");
+  radarCanvas.print(beepVolume);
+  radarCanvas.print(" ");
+  if (currentMode == SPEED) radarCanvas.setTextColor(SH110X_BLACK, SH110X_WHITE);
+  radarCanvas.print("S");
+  radarCanvas.setTextColor(SH110X_WHITE);
+  radarCanvas.print(":");
+  radarCanvas.print(sweepSpeed, 0);
+  radarCanvas.print(" ");
+  if (currentMode == ALERT) radarCanvas.setTextColor(SH110X_BLACK, SH110X_WHITE);
+  radarCanvas.print("P");
+  radarCanvas.setTextColor(SH110X_WHITE);
+  radarCanvas.print(":");
+  radarCanvas.print(inboundAlertDistanceKm, 0);
+  radarCanvas.print("k");
 
-  Aircraft currentAircraftToDisplay; // CHANGED
+  Aircraft currentAircraftToDisplay;
   Aircraft currentClosestInbound;
   std::vector<RadarBlip> currentBlips;
 
   xSemaphoreTake(dataMutex, portMAX_DELAY);
-  currentAircraftToDisplay = lastPingedAircraft; // CHANGED: Get last pinged aircraft
+  currentAircraftToDisplay = lastPingedAircraft;
   currentBlips = activeBlips;
   currentClosestInbound = closestInboundAircraft;
   xSemaphoreGive(dataMutex);
 
-  // CHANGED: All display logic now uses currentAircraftToDisplay
   if (currentAircraftToDisplay.isValid) {
-    display.setCursor(0, 8);
-    display.print("Flt: ");
-    display.println(strlen(currentAircraftToDisplay.flight) > 0 ? currentAircraftToDisplay.flight : "------");
-    display.print("Dst: ");
-    display.print(currentAircraftToDisplay.distanceKm, 1);
-    display.println("km");
-    display.print("Alt: ");
+    radarCanvas.setCursor(0, 8);
+    radarCanvas.print("Flt: ");
+    radarCanvas.println(strlen(currentAircraftToDisplay.flight) > 0 ? currentAircraftToDisplay.flight : "------");
+    radarCanvas.print("Dst: ");
+    radarCanvas.print(currentAircraftToDisplay.distanceKm, 1);
+    radarCanvas.println("km");
+    radarCanvas.print("Alt: ");
     if (currentAircraftToDisplay.altitude >= 0) {
-      display.print(currentAircraftToDisplay.altitude);
-      display.println("ft");
+      radarCanvas.print(currentAircraftToDisplay.altitude);
+      radarCanvas.println("ft");
     } else {
-      display.println("-----");
+      radarCanvas.println("-----");
     }
-    display.print("Spd: ");
+    radarCanvas.print("Spd: ");
     if (currentAircraftToDisplay.groundSpeed >= 0) {
-        display.print(currentAircraftToDisplay.groundSpeed, 0);
-        display.println("kt");
+      radarCanvas.print(currentAircraftToDisplay.groundSpeed, 0);
+      radarCanvas.println("kt");
     } else {
-        display.println("---");
+      radarCanvas.println("---");
     }
-    display.print("Rng: ");
-    display.print(radarRangeKm, 0);
-    display.println("km");
+    radarCanvas.print("Rng: ");
+    radarCanvas.print(radarRangeKm, 0);
+    radarCanvas.println("km");
   } else {
-    display.setCursor(0, 8);
-    display.println("Scanning...");
-    display.setCursor(0, 24);
-    display.print("Range:");
-    display.print(radarRangeKm, 0);
-    display.println("km");
+    radarCanvas.setCursor(0, 8);
+    radarCanvas.println("Scanning...");
+    radarCanvas.setCursor(0, 24);
+    radarCanvas.print("Range:");
+    radarCanvas.print(radarRangeKm, 0);
+    radarCanvas.println("km");
   }
 
   if (currentClosestInbound.isInbound && currentClosestInbound.minutesToClosest >= 0) {
-    display.setCursor(0, 56);
-    display.print("ETA: ");
-    display.print(currentClosestInbound.minutesToClosest, 1);
-    display.print("m");
+    radarCanvas.setCursor(0, 56);
+    radarCanvas.print("ETA: ");
+    radarCanvas.print(currentClosestInbound.minutesToClosest, 1);
+    radarCanvas.print("m");
   }
 
   // Draw WiFi signal strength meter
@@ -491,19 +495,23 @@ void drawRadarScreen() {
   int bars = 0;
   if (WiFi.status() == WL_CONNECTED) {
     long rssi = WiFi.RSSI();
-    if (rssi > -55)      bars = 4;
-    else if (rssi > -65) bars = 3;
-    else if (rssi > -75) bars = 2;
-    else if (rssi > -85) bars = 1;
+    if (rssi > -55)
+      bars = 4;
+    else if (rssi > -65)
+      bars = 3;
+    else if (rssi > -75)
+      bars = 2;
+    else if (rssi > -85)
+      bars = 1;
   }
   for (int i = 0; i < 4; i++) {
     int barHeight = (i + 1) * 2;
     int barX = wifiX + i * 3;
     int barY = wifiY - barHeight;
     if (i < bars) {
-      display.fillRect(barX, barY, 2, barHeight, SH110X_WHITE);
+      radarCanvas.fillRect(barX, barY, 2, barHeight, SH110X_WHITE);
     } else {
-      display.drawRect(barX, barY, 2, barHeight, SH110X_WHITE);
+      radarCanvas.drawRect(barX, barY, 2, barHeight, SH110X_WHITE);
     }
   }
 
@@ -511,20 +519,20 @@ void drawRadarScreen() {
   int16_t dumpX = wifiX - 6;
   int16_t dumpY = wifiY - 2;
   if (dataConnectionOk) {
-    display.fillCircle(dumpX, dumpY, 2, SH110X_WHITE);
+    radarCanvas.fillCircle(dumpX, dumpY, 2, SH110X_WHITE);
   } else {
-    display.drawCircle(dumpX, dumpY, 2, SH110X_WHITE);
-    display.drawLine(dumpX - 2, dumpY - 2, dumpX + 2, dumpY + 2, SH110X_WHITE);
-    display.drawLine(dumpX - 2, dumpY + 2, dumpX + 2, dumpY - 2, SH110X_WHITE);
+    radarCanvas.drawCircle(dumpX, dumpY, 2, SH110X_WHITE);
+    radarCanvas.drawLine(dumpX - 2, dumpY - 2, dumpX + 2, dumpY + 2, SH110X_WHITE);
+    radarCanvas.drawLine(dumpX - 2, dumpY + 2, dumpX + 2, dumpY - 2, SH110X_WHITE);
   }
 
-  display.drawCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS, SH110X_WHITE);
-  display.drawCircle(MINI_RADAR_CENTER_X, MINI_RADAR_CENTER_Y, MINI_RADAR_RADIUS, SH110X_WHITE);
-  display.setCursor(RADAR_CENTER_X - 3, RADAR_CENTER_Y - RADAR_RADIUS - 9);
-  if (currentMode == RADAR) display.setTextColor(SH110X_BLACK, SH110X_WHITE);
-  const char compassLetters[] = {'N','E','S','W'};
-  display.print(compassLetters[compassIndex]);
-  if (currentMode == RADAR) display.setTextColor(SH110X_WHITE);
+  radarCanvas.drawCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS, SH110X_WHITE);
+  radarCanvas.drawCircle(MINI_RADAR_CENTER_X, MINI_RADAR_CENTER_Y, MINI_RADAR_RADIUS, SH110X_WHITE);
+  radarCanvas.setCursor(RADAR_CENTER_X - 3, RADAR_CENTER_Y - RADAR_RADIUS - 9);
+  if (currentMode == RADAR) radarCanvas.setTextColor(SH110X_BLACK, SH110X_WHITE);
+  const char compassLetters[] = {'N', 'E', 'S', 'W'};
+  radarCanvas.print(compassLetters[compassIndex]);
+  if (currentMode == RADAR) radarCanvas.setTextColor(SH110X_WHITE);
 
   drawDottedCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS * 2 / 3, SH110X_WHITE);
   drawDottedCircle(RADAR_CENTER_X, RADAR_CENTER_Y, RADAR_RADIUS * 1 / 3, SH110X_WHITE);
@@ -533,19 +541,21 @@ void drawRadarScreen() {
   for (const auto& blip : currentBlips) {
     if (blip.inbound && (flashPhase % 2)) continue;
     if (blip.lifespan > (BLIP_LIFESPAN_FRAMES * 2 / 3)) {
-      display.fillCircle(blip.x, blip.y, 3, SH110X_WHITE);
+      radarCanvas.fillCircle(blip.x, blip.y, 3, SH110X_WHITE);
     } else if (blip.lifespan > (BLIP_LIFESPAN_FRAMES * 1 / 3)) {
-      display.fillCircle(blip.x, blip.y, 2, SH110X_WHITE);
+      radarCanvas.fillCircle(blip.x, blip.y, 2, SH110X_WHITE);
     } else {
-      display.fillCircle(blip.x, blip.y, 1, SH110X_WHITE);
+      radarCanvas.fillCircle(blip.x, blip.y, 1, SH110X_WHITE);
     }
   }
 
   double sweepRad = sweepAngle * PI / 180.0;
   int16_t sweepX = RADAR_CENTER_X + (RADAR_RADIUS - 1) * sin(sweepRad);
   int16_t sweepY = RADAR_CENTER_Y - (RADAR_RADIUS - 1) * cos(sweepRad);
-  display.drawLine(RADAR_CENTER_X, RADAR_CENTER_Y, sweepX, sweepY, SH110X_WHITE);
+  radarCanvas.drawLine(RADAR_CENTER_X, RADAR_CENTER_Y, sweepX, sweepY, SH110X_WHITE);
 
+  display.clearDisplay();
+  display.drawBitmap(0, 0, radarCanvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT, SH110X_WHITE, SH110X_BLACK);
   display.display();
 }
 
@@ -733,7 +743,7 @@ void drawDottedCircle(int16_t x0, int16_t y0, int16_t r, uint16_t color) {
     double angleRad = i * PI / 180.0;
     int16_t x = x0 + r * sin(angleRad);
     int16_t y = y0 - r * cos(angleRad);
-    display.drawPixel(x, y, color);
+    radarCanvas.drawPixel(x, y, color);
   }
 }
 
