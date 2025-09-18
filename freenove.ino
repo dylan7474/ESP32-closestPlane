@@ -12,12 +12,15 @@
 // --- Display & Timing Constants ---
 static const uint16_t COLOR_BACKGROUND = TFT_BLACK;
 static const uint16_t COLOR_TEXT = TFT_WHITE;
+static const uint16_t COLOR_RADAR_OUTLINE = TFT_DARKGREEN;
 static const int INFO_START_Y = 58;
 static const int INFO_LINE_HEIGHT = 26;
 static const unsigned long REFRESH_INTERVAL_MS = 5000;
 static const unsigned long WIFI_RETRY_INTERVAL_MS = 15000;
 static const unsigned long WIFI_CONNECT_TIMEOUT_MS = 10000;
 static const double INBOUND_ALERT_DISTANCE_KM = 5.0;
+static const int RADAR_RADIUS = 48;
+static const int RADAR_MARGIN = 12;
 
 TFT_eSPI tft = TFT_eSPI();
 
@@ -46,6 +49,7 @@ void drawStaticLayout();
 void updateDisplay();
 void drawInfoLine(int index, const String &text);
 void drawStatusLine(int index, const String &text);
+void drawRadarPlaceholder();
 void connectWiFi();
 void fetchAircraft();
 double haversine(double lat1, double lon1, double lat2, double lon2);
@@ -100,6 +104,7 @@ void drawStaticLayout() {
   tft.drawFastHLine(0, 54, tft.width(), TFT_DARKGREY);
   tft.setTextDatum(TL_DATUM);
   tft.setTextSize(2);
+  drawRadarPlaceholder();
 }
 
 void drawInfoLine(int index, const String &text) {
@@ -189,6 +194,16 @@ void updateDisplay() {
   drawStatusLine(3, updateLine);
 
   tft.setTextPadding(0);
+  drawRadarPlaceholder();
+}
+
+void drawRadarPlaceholder() {
+  int centerX = tft.width() - RADAR_MARGIN - RADAR_RADIUS;
+  int centerY = tft.height() - RADAR_MARGIN - RADAR_RADIUS;
+
+  tft.fillCircle(centerX, centerY, RADAR_RADIUS, COLOR_BACKGROUND);
+  tft.drawCircle(centerX, centerY, RADAR_RADIUS, COLOR_RADAR_OUTLINE);
+  tft.drawCircle(centerX, centerY, RADAR_RADIUS / 2, COLOR_RADAR_OUTLINE);
 }
 
 void connectWiFi() {
